@@ -52,7 +52,6 @@ apiVersion: llamastack.io/v1alpha1
 kind: LlamaStackDistribution
 metadata:
   name: llamastackdistribution-sample
-  namespace: ollama-dist
 spec:
   replicas: 1
   server:
