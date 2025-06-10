@@ -46,9 +46,20 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
+
+//+kubebuilder:rbac:groups=llamastack.io,resources=llamastackdistributions,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=llamastack.io,resources=llamastackdistributions/status,verbs=get;update;patch
+//+kubebuilder:rbac:groups=llamastack.io,resources=llamastackdistributions/finalizers,verbs=update
+//+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
+//+kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
 
 const (
 	operatorConfigData = "llama-stack-operator-config"
@@ -122,6 +133,13 @@ func (r *LlamaStackDistributionReconciler) fetchInstance(ctx context.Context, na
 
 // reconcileResources reconciles all resources for the LlamaStackDistribution instance.
 func (r *LlamaStackDistributionReconciler) reconcileResources(ctx context.Context, instance *llamav1alpha1.LlamaStackDistribution) error {
+	// Reconcile the ConfigMap if specified by the user
+	if instance.Spec.Server.UserConfig != nil {
+		if err := r.reconcileUserConfigMap(ctx, instance); err != nil {
+			return fmt.Errorf("failed to reconcile user ConfigMap: %w", err)
+		}
+	}
+
 	// Reconcile the PVC if storage is configured
 	if instance.Spec.Server.Storage != nil {
 		if err := r.reconcilePVC(ctx, instance); err != nil {
@@ -191,7 +209,48 @@ func (r *LlamaStackDistributionReconciler) SetupWithManager(mgr ctrl.Manager) er
 		Owns(&corev1.Service{}).
 		Owns(&networkingv1.NetworkPolicy{}).
 		Owns(&corev1.PersistentVolumeClaim{}).
+		Watches(
+			&corev1.ConfigMap{},
+			handler.EnqueueRequestsFromMapFunc(r.findLlamaStackDistributionsForConfigMap),
+			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
+		).
 		Complete(r)
+}
+
+// findLlamaStackDistributionsForConfigMap maps ConfigMap changes to LlamaStackDistribution reconcile requests.
+func (r *LlamaStackDistributionReconciler) findLlamaStackDistributionsForConfigMap(ctx context.Context, configMap client.Object) []reconcile.Request {
+	attachedLlamaStacks := &llamav1alpha1.LlamaStackDistributionList{}
+	listOps := &client.ListOptions{
+		Namespace: configMap.GetNamespace(),
+	}
+
+	err := r.List(ctx, attachedLlamaStacks, listOps)
+	if err != nil {
+		return []reconcile.Request{}
+	}
+
+	requests := make([]reconcile.Request, 0)
+	for _, llamaStack := range attachedLlamaStacks.Items {
+		// Check if this LlamaStackDistribution references the changed ConfigMap
+		if llamaStack.Spec.Server.UserConfig != nil && llamaStack.Spec.Server.UserConfig.ConfigMapName == configMap.GetName() {
+			// Handle cross-namespace references
+			configMapNamespace := configMap.GetNamespace()
+			if llamaStack.Spec.Server.UserConfig.ConfigMapNamespace != "" {
+				configMapNamespace = llamaStack.Spec.Server.UserConfig.ConfigMapNamespace
+			}
+
+			// Only enqueue if the ConfigMap is in the expected namespace
+			if configMapNamespace == configMap.GetNamespace() {
+				requests = append(requests, reconcile.Request{
+					NamespacedName: types.NamespacedName{
+						Name:      llamaStack.Name,
+						Namespace: llamaStack.Namespace,
+					},
+				})
+			}
+		}
+	}
+	return requests
 }
 
 // reconcilePVC creates or updates the PVC for the LlamaStack server.
@@ -257,6 +316,20 @@ func (r *LlamaStackDistributionReconciler) reconcileDeployment(ctx context.Conte
 	// Configure storage
 	podSpec := configurePodStorage(instance, container)
 
+	// Prepare annotations for the pod template
+	podAnnotations := make(map[string]string)
+
+	// Add ConfigMap hash to trigger restarts when the ConfigMap changes
+	if instance.Spec.Server.UserConfig != nil && instance.Spec.Server.UserConfig.ConfigMapName != "" {
+		configMapHash, err := r.getConfigMapHash(ctx, instance)
+		if err != nil {
+			logger.Error(err, "failed to get ConfigMap hash")
+			// Don't fail the reconciliation, but log the error
+		} else if configMapHash != "" {
+			podAnnotations["configmap.hash/user-config"] = configMapHash
+		}
+	}
+
 	// Create deployment object
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -277,6 +350,7 @@ func (r *LlamaStackDistributionReconciler) reconcileDeployment(ctx context.Conte
 						llamav1alpha1.DefaultLabelKey: llamav1alpha1.DefaultLabelValue,
 						"app.kubernetes.io/instance":  instance.Name,
 					},
+					Annotations: podAnnotations,
 				},
 				Spec: podSpec,
 			},
@@ -553,6 +627,63 @@ func (r *LlamaStackDistributionReconciler) reconcileNetworkPolicy(ctx context.Co
 	}
 
 	return deploy.ApplyNetworkPolicy(ctx, r.Client, r.Scheme, instance, networkPolicy, log)
+}
+
+// reconcileUserConfigMap validates that the referenced ConfigMap exists.
+func (r *LlamaStackDistributionReconciler) reconcileUserConfigMap(ctx context.Context, instance *llamav1alpha1.LlamaStackDistribution) error {
+	logger := log.FromContext(ctx)
+
+	if instance.Spec.Server.UserConfig == nil || instance.Spec.Server.UserConfig.ConfigMapName == "" {
+		return nil
+	}
+
+	// Determine the ConfigMap namespace - default to the same namespace as the LlamaStackDistribution.
+	configMapNamespace := instance.Namespace
+	if instance.Spec.Server.UserConfig.ConfigMapNamespace != "" {
+		configMapNamespace = instance.Spec.Server.UserConfig.ConfigMapNamespace
+	}
+
+	// Check if the ConfigMap exists
+	configMap := &corev1.ConfigMap{}
+	err := r.Get(ctx, types.NamespacedName{
+		Name:      instance.Spec.Server.UserConfig.ConfigMapName,
+		Namespace: configMapNamespace,
+	}, configMap)
+
+	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			return fmt.Errorf("failed to find referenced ConfigMap %s/%s", configMapNamespace, instance.Spec.Server.UserConfig.ConfigMapName)
+		}
+		return fmt.Errorf("failed to fetch ConfigMap %s/%s: %w", configMapNamespace, instance.Spec.Server.UserConfig.ConfigMapName, err)
+	}
+
+	logger.Info("User ConfigMap found", "configMap", configMap.Name, "namespace", configMap.Namespace)
+	return nil
+}
+
+// getConfigMapHash calculates a hash of the ConfigMap data to detect changes.
+func (r *LlamaStackDistributionReconciler) getConfigMapHash(ctx context.Context, instance *llamav1alpha1.LlamaStackDistribution) (string, error) {
+	if instance.Spec.Server.UserConfig == nil || instance.Spec.Server.UserConfig.ConfigMapName == "" {
+		return "", nil
+	}
+
+	configMapNamespace := instance.Namespace
+	if instance.Spec.Server.UserConfig.ConfigMapNamespace != "" {
+		configMapNamespace = instance.Spec.Server.UserConfig.ConfigMapNamespace
+	}
+
+	configMap := &corev1.ConfigMap{}
+	err := r.Get(ctx, types.NamespacedName{
+		Name:      instance.Spec.Server.UserConfig.ConfigMapName,
+		Namespace: configMapNamespace,
+	}, configMap)
+
+	if err != nil {
+		return "", err
+	}
+
+	// Create a simple hash based on ConfigMap resource version and data
+	return fmt.Sprintf("%s-%s", configMap.ResourceVersion, configMap.Name), nil
 }
 
 // createDefaultConfigMap creates a ConfigMap with default feature flag values.
