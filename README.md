@@ -70,6 +70,58 @@ spec:
 ```
 3. Verify the server pod is running in the user defined namespace.
 
+### Using a ConfigMap for run.yaml configuration
+
+A ConfigMap can be used to store run.yaml configuration for each LlamaStackDistribution.
+Updates to the ConfigMap will restart the Pod to load the new data.
+
+Example to create a run.yaml ConfigMap, and a LlamaStackDistribution that references it:
+```
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: llama-stack-config
+data:
+  run.yaml: |
+    # Llama Stack Configuration
+    version: '2'
+    image_name: ollama
+    apis:
+    - inference
+    providers:
+      inference:
+      - provider_id: ollama
+        provider_type: "remote::ollama"
+        config:
+          url: "http://ollama-server-service.ollama-dist.svc.cluster.local:11434"
+    models:
+      - model_id: "llama3.2:1b"
+        provider_id: ollama
+        model_type: llm
+    server:
+      port: 8321
+---
+apiVersion: llamastack.io/v1alpha1
+kind: LlamaStackDistribution
+metadata:
+  name: llamastack-with-config
+spec:
+  replicas: 1
+  server:
+    distribution:
+      name: ollama
+    containerSpec:
+      port: 8321
+      env:
+      - name: INFERENCE_MODEL
+        value: "llama3.2:1b"
+      - name: OLLAMA_URL
+        value: "http://ollama-server-service.ollama-dist.svc.cluster.local:11434"
+    userConfig:
+      configMapName: llama-stack-config
+      # configMapNamespace: ""  # Optional - defaults to the same namespace as the CR
+```
+
 ## Developer Guide
 
 ### Prerequisites
