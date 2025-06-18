@@ -174,6 +174,25 @@ func (r *LlamaStackDistributionReconciler) reconcileResources(ctx context.Contex
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *LlamaStackDistributionReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// Create a field indexer for ConfigMap references to improve performance
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &llamav1alpha1.LlamaStackDistribution{}, "configMapRef", func(rawObj client.Object) []string {
+		distribution := rawObj.(*llamav1alpha1.LlamaStackDistribution)
+		if distribution.Spec.Server.UserConfig == nil || distribution.Spec.Server.UserConfig.ConfigMapName == "" {
+			return nil
+		}
+
+		// Create index key as "namespace/name" format
+		configMapNamespace := distribution.Namespace
+		if distribution.Spec.Server.UserConfig.ConfigMapNamespace != "" {
+			configMapNamespace = distribution.Spec.Server.UserConfig.ConfigMapNamespace
+		}
+
+		indexKey := fmt.Sprintf("%s/%s", configMapNamespace, distribution.Spec.Server.UserConfig.ConfigMapName)
+		return []string{indexKey}
+	}); err != nil {
+		return fmt.Errorf("failed to create ConfigMap reference field indexer: %w", err)
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&llamav1alpha1.LlamaStackDistribution{}, builder.WithPredicates(predicate.Funcs{
 			UpdateFunc: func(e event.UpdateEvent) bool {
@@ -212,43 +231,54 @@ func (r *LlamaStackDistributionReconciler) SetupWithManager(mgr ctrl.Manager) er
 		Watches(
 			&corev1.ConfigMap{},
 			handler.EnqueueRequestsFromMapFunc(r.findLlamaStackDistributionsForConfigMap),
-			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
+			builder.WithPredicates(predicate.Funcs{
+				UpdateFunc: func(e event.UpdateEvent) bool {
+					oldConfigMap, oldOk := e.ObjectOld.(*corev1.ConfigMap)
+					newConfigMap, newOk := e.ObjectNew.(*corev1.ConfigMap)
+
+					if !oldOk || !newOk {
+						return false
+					}
+
+					// Only trigger if Data or BinaryData has changed
+					return !cmp.Equal(oldConfigMap.Data, newConfigMap.Data) ||
+						!cmp.Equal(oldConfigMap.BinaryData, newConfigMap.BinaryData)
+				},
+				CreateFunc: func(e event.CreateEvent) bool {
+					return true // Always process new ConfigMaps
+				},
+				DeleteFunc: func(e event.DeleteEvent) bool {
+					return true // Always process ConfigMap deletions
+				},
+			}),
 		).
 		Complete(r)
 }
 
 // findLlamaStackDistributionsForConfigMap maps ConfigMap changes to LlamaStackDistribution reconcile requests.
 func (r *LlamaStackDistributionReconciler) findLlamaStackDistributionsForConfigMap(ctx context.Context, configMap client.Object) []reconcile.Request {
-	attachedLlamaStacks := &llamav1alpha1.LlamaStackDistributionList{}
-	listOps := &client.ListOptions{
-		Namespace: configMap.GetNamespace(),
-	}
+	// Use field indexer for efficient lookup - create the same index key format
+	indexKey := fmt.Sprintf("%s/%s", configMap.GetNamespace(), configMap.GetName())
 
-	err := r.List(ctx, attachedLlamaStacks, listOps)
+	attachedLlamaStacks := &llamav1alpha1.LlamaStackDistributionList{}
+
+	err := r.List(ctx, attachedLlamaStacks, client.MatchingFields{
+		"configMapRef": indexKey,
+	})
 	if err != nil {
+		fmt.Printf("failed to list LlamaStackDistributions using field selector: %v\n", err)
 		return []reconcile.Request{}
 	}
 
-	requests := make([]reconcile.Request, 0)
+	// Convert directly to reconcile requests since the field indexer already filtered for us
+	requests := make([]reconcile.Request, 0, len(attachedLlamaStacks.Items))
 	for _, llamaStack := range attachedLlamaStacks.Items {
-		// Check if this LlamaStackDistribution references the changed ConfigMap
-		if llamaStack.Spec.Server.UserConfig != nil && llamaStack.Spec.Server.UserConfig.ConfigMapName == configMap.GetName() {
-			// Handle cross-namespace references
-			configMapNamespace := configMap.GetNamespace()
-			if llamaStack.Spec.Server.UserConfig.ConfigMapNamespace != "" {
-				configMapNamespace = llamaStack.Spec.Server.UserConfig.ConfigMapNamespace
-			}
-
-			// Only enqueue if the ConfigMap is in the expected namespace
-			if configMapNamespace == configMap.GetNamespace() {
-				requests = append(requests, reconcile.Request{
-					NamespacedName: types.NamespacedName{
-						Name:      llamaStack.Name,
-						Namespace: llamaStack.Namespace,
-					},
-				})
-			}
-		}
+		requests = append(requests, reconcile.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      llamaStack.Name,
+				Namespace: llamaStack.Namespace,
+			},
+		})
 	}
 	return requests
 }
@@ -323,9 +353,9 @@ func (r *LlamaStackDistributionReconciler) reconcileDeployment(ctx context.Conte
 	if instance.Spec.Server.UserConfig != nil && instance.Spec.Server.UserConfig.ConfigMapName != "" {
 		configMapHash, err := r.getConfigMapHash(ctx, instance)
 		if err != nil {
-			logger.Error(err, "failed to get ConfigMap hash")
-			// Don't fail the reconciliation, but log the error
-		} else if configMapHash != "" {
+			return fmt.Errorf("failed to get ConfigMap hash for pod restart annotation: %w", err)
+		}
+		if configMapHash != "" {
 			podAnnotations["configmap.hash/user-config"] = configMapHash
 		}
 	}
@@ -649,7 +679,6 @@ func (r *LlamaStackDistributionReconciler) reconcileUserConfigMap(ctx context.Co
 		Name:      instance.Spec.Server.UserConfig.ConfigMapName,
 		Namespace: configMapNamespace,
 	}, configMap)
-
 	if err != nil {
 		if k8serrors.IsNotFound(err) {
 			return fmt.Errorf("failed to find referenced ConfigMap %s/%s", configMapNamespace, instance.Spec.Server.UserConfig.ConfigMapName)
@@ -677,7 +706,6 @@ func (r *LlamaStackDistributionReconciler) getConfigMapHash(ctx context.Context,
 		Name:      instance.Spec.Server.UserConfig.ConfigMapName,
 		Namespace: configMapNamespace,
 	}, configMap)
-
 	if err != nil {
 		return "", err
 	}

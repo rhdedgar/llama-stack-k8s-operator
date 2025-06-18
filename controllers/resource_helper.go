@@ -60,13 +60,13 @@ func buildContainerSpec(instance *llamav1alpha1.LlamaStackDistribution, image st
 	if instance.Spec.Server.UserConfig != nil && instance.Spec.Server.UserConfig.ConfigMapName != "" {
 		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
 			Name:      "user-config",
-			MountPath: "/etc/llama-stack/config",
+			MountPath: "/etc/llama-stack/",
 			ReadOnly:  true,
 		})
 
 		// Override the container entrypoint to use the custom config file instead of the default template
 		container.Command = []string{"python", "-m", "llama_stack.distribution.server.server"}
-		container.Args = []string{"--config", "/etc/llama-stack/config/run.yaml"}
+		container.Args = []string{"--config", "/etc/llama-stack/run.yaml"}
 	}
 
 	if len(instance.Spec.Server.ContainerSpec.Command) > 0 {

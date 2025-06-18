@@ -147,7 +147,7 @@ func TestBuildContainerSpec(t *testing.T) {
 				ImagePullPolicy: corev1.PullAlways,
 				Ports:           []corev1.ContainerPort{{ContainerPort: llamav1alpha1.DefaultServerPort}},
 				Command:         []string{"python", "-m", "llama_stack.distribution.server.server"},
-				Args:            []string{"--config", "/etc/llama-stack/config/run.yaml"},
+				Args:            []string{"--config", "/etc/llama-stack/run.yaml"},
 				VolumeMounts: []corev1.VolumeMount{
 					{
 						Name:      "lls-storage",
@@ -155,7 +155,7 @@ func TestBuildContainerSpec(t *testing.T) {
 					},
 					{
 						Name:      "user-config",
-						MountPath: "/etc/llama-stack/config",
+						MountPath: "/etc/llama-stack/",
 						ReadOnly:  true,
 					},
 				},
