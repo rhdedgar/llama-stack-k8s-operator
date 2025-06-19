@@ -175,19 +175,19 @@ func (r *LlamaStackDistributionReconciler) reconcileResources(ctx context.Contex
 // SetupWithManager sets up the controller with the Manager.
 func (r *LlamaStackDistributionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// Create a field indexer for ConfigMap references to improve performance
-	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &llamav1alpha1.LlamaStackDistribution{}, "configMapRef", func(rawObj client.Object) []string {
-		distribution := rawObj.(*llamav1alpha1.LlamaStackDistribution)
-		if distribution.Spec.Server.UserConfig == nil || distribution.Spec.Server.UserConfig.ConfigMapName == "" {
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &llamav1alpha1.LlamaStackDistribution{}, ".metadata.controller", func(rawObj client.Object) []string {
+		llsd := rawObj.(*llamav1alpha1.LlamaStackDistribution)
+		if llsd.Spec.Server.UserConfig == nil || llsd.Spec.Server.UserConfig.ConfigMapName == "" {
 			return nil
 		}
 
 		// Create index key as "namespace/name" format
-		configMapNamespace := distribution.Namespace
-		if distribution.Spec.Server.UserConfig.ConfigMapNamespace != "" {
-			configMapNamespace = distribution.Spec.Server.UserConfig.ConfigMapNamespace
+		configMapNamespace := llsd.Namespace
+		if llsd.Spec.Server.UserConfig.ConfigMapNamespace != "" {
+			configMapNamespace = llsd.Spec.Server.UserConfig.ConfigMapNamespace
 		}
 
-		indexKey := fmt.Sprintf("%s/%s", configMapNamespace, distribution.Spec.Server.UserConfig.ConfigMapName)
+		indexKey := fmt.Sprintf("%s/%s", configMapNamespace, llsd.Spec.Server.UserConfig.ConfigMapName)
 		return []string{indexKey}
 	}); err != nil {
 		return fmt.Errorf("failed to create ConfigMap reference field indexer: %w", err)
@@ -263,7 +263,7 @@ func (r *LlamaStackDistributionReconciler) findLlamaStackDistributionsForConfigM
 	attachedLlamaStacks := &llamav1alpha1.LlamaStackDistributionList{}
 
 	err := r.List(ctx, attachedLlamaStacks, client.MatchingFields{
-		"configMapRef": indexKey,
+		".metadata.controller": indexKey,
 	})
 	if err != nil {
 		fmt.Printf("failed to list LlamaStackDistributions using field selector: %v\n", err)
