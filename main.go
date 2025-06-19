@@ -54,8 +54,8 @@ func init() { //nolint:gochecknoinits
 	//+kubebuilder:scaffold:scheme
 }
 
-func setupReconciler(ctx context.Context, cli client.Client, mgr ctrl.Manager, clusterInfo *cluster.ClusterInfo) error {
-	reconciler, err := controllers.NewLlamaStackDistributionReconciler(ctx, cli, scheme, clusterInfo)
+func setupReconciler(ctx context.Context, mgr ctrl.Manager, clusterInfo *cluster.ClusterInfo) error {
+	reconciler, err := controllers.NewLlamaStackDistributionReconciler(ctx, mgr.GetClient(), scheme, clusterInfo)
 	if err != nil {
 		return fmt.Errorf("failed to create reconciler: %w", err)
 	}
@@ -122,25 +122,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	cfg, err := config.GetConfig()
-	if err != nil {
-		setupLog.Error(err, "failed to get config for setup")
-		os.Exit(1)
-	}
-
-	setupClient, err := client.New(cfg, client.Options{Scheme: scheme})
-	if err != nil {
-		setupLog.Error(err, "failed to set up clients")
-		os.Exit(1)
-	}
-
-	clusterInfo, err := cluster.NewClusterInfo(ctx, setupClient)
+	clusterInfo, err := cluster.NewClusterInfo(ctx, mgr.GetClient())
 	if err != nil {
 		setupLog.Error(err, "failed to initialize cluster config")
 		os.Exit(1)
 	}
 
-	if err := setupReconciler(ctx, setupClient, mgr, clusterInfo); err != nil {
+	if err := setupReconciler(ctx, mgr, clusterInfo); err != nil {
 		setupLog.Error(err, "failed to set up reconciler")
 		os.Exit(1)
 	}
