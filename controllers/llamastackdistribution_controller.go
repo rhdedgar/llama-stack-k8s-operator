@@ -38,6 +38,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -175,7 +176,7 @@ func (r *LlamaStackDistributionReconciler) reconcileResources(ctx context.Contex
 // SetupWithManager sets up the controller with the Manager.
 func (r *LlamaStackDistributionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// Create a field indexer for ConfigMap references to improve performance
-	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &llamav1alpha1.LlamaStackDistribution{}, ".metadata.controller", func(rawObj client.Object) []string {
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &llamav1alpha1.LlamaStackDistribution{}, "configMapKeyRef", func(rawObj client.Object) []string {
 		llsd := rawObj.(*llamav1alpha1.LlamaStackDistribution)
 		if llsd.Spec.Server.UserConfig == nil || llsd.Spec.Server.UserConfig.ConfigMapName == "" {
 			return nil
@@ -231,6 +232,7 @@ func (r *LlamaStackDistributionReconciler) SetupWithManager(mgr ctrl.Manager) er
 		Watches(
 			&corev1.ConfigMap{},
 			handler.EnqueueRequestsFromMapFunc(r.findLlamaStackDistributionsForConfigMap),
+			//builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
 			builder.WithPredicates(predicate.Funcs{
 				UpdateFunc: func(e event.UpdateEvent) bool {
 					oldConfigMap, oldOk := e.ObjectOld.(*corev1.ConfigMap)
@@ -260,11 +262,23 @@ func (r *LlamaStackDistributionReconciler) findLlamaStackDistributionsForConfigM
 	// Use field indexer for efficient lookup - create the same index key format
 	indexKey := fmt.Sprintf("%s/%s", configMap.GetNamespace(), configMap.GetName())
 
-	attachedLlamaStacks := &llamav1alpha1.LlamaStackDistributionList{}
+	attachedLlamaStacks := llamav1alpha1.LlamaStackDistributionList{}
 
-	err := r.List(ctx, attachedLlamaStacks, client.MatchingFields{
-		".metadata.controller": indexKey,
+	fmt.Printf("DEBUG: indexKey: %s\n", indexKey)
+	//fmt.Printf("DEBUG: configMap: %v\n", configMap)
+
+	err := r.List(ctx, &attachedLlamaStacks, &client.ListOptions{
+		FieldSelector: fields.Set{
+			"configMapKeyRef": indexKey,
+		}.AsSelector(),
 	})
+
+	// listOps := &client.ListOptions{
+	// 	FieldSelector: client.MatchingFields("configMapKeyRef": configMap.GetName()),
+	// 	Namespace:     configMap.GetNamespace(),
+	// }
+
+	// err := r.List(ctx, &attachedLlamaStacks, listOps)
 	if err != nil {
 		fmt.Printf("failed to list LlamaStackDistributions using field selector: %v\n", err)
 		return []reconcile.Request{}

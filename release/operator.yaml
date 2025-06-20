@@ -98,7 +98,7 @@ spec:
                               description: Source for the environment variable's value.
                                 Cannot be used if value is not empty.
                               properties:
-                                configMapKeyRef:
+                                configMapKeyRefRef:
                                   description: Selects a key of a ConfigMap.
                                   properties:
                                     key:
