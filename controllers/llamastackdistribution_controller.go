@@ -38,7 +38,6 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -176,7 +175,7 @@ func (r *LlamaStackDistributionReconciler) reconcileResources(ctx context.Contex
 // SetupWithManager sets up the controller with the Manager.
 func (r *LlamaStackDistributionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// Create a field indexer for ConfigMap references to improve performance
-	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &llamav1alpha1.LlamaStackDistribution{}, "configMapKeyRef", func(rawObj client.Object) []string {
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &llamav1alpha1.LlamaStackDistribution{}, "spec.server.userConfig.configMapName", func(rawObj client.Object) []string {
 		llsd := rawObj.(*llamav1alpha1.LlamaStackDistribution)
 		if llsd.Spec.Server.UserConfig == nil || llsd.Spec.Server.UserConfig.ConfigMapName == "" {
 			return nil
@@ -263,26 +262,14 @@ func (r *LlamaStackDistributionReconciler) findLlamaStackDistributionsForConfigM
 	indexKey := fmt.Sprintf("%s/%s", configMap.GetNamespace(), configMap.GetName())
 
 	attachedLlamaStacks := llamav1alpha1.LlamaStackDistributionList{}
-
 	fmt.Printf("DEBUG: indexKey: %s\n", indexKey)
-	//fmt.Printf("DEBUG: configMap: %v\n", configMap)
-
-	err := r.List(ctx, &attachedLlamaStacks, &client.ListOptions{
-		FieldSelector: fields.Set{
-			"configMapKeyRef": indexKey,
-		}.AsSelector(),
-	})
-
-	// listOps := &client.ListOptions{
-	// 	FieldSelector: client.MatchingFields("configMapKeyRef": configMap.GetName()),
-	// 	Namespace:     configMap.GetNamespace(),
-	// }
-
-	// err := r.List(ctx, &attachedLlamaStacks, listOps)
+	err := r.List(ctx, &attachedLlamaStacks, client.MatchingFields{"spec.server.userConfig.configMapName": indexKey})
 	if err != nil {
-		fmt.Printf("failed to list LlamaStackDistributions using field selector: %v\n", err)
+		fmt.Printf("failed to list LlamaStackDistributions for %v using field indexer: %v\n", indexKey, err)
 		return []reconcile.Request{}
 	}
+	fmt.Printf("DEBUG: attachedLlamaStacks: %v\n", attachedLlamaStacks)
+	fmt.Printf("DEBUG: attachedLlamaStacks.Items: %v\n", attachedLlamaStacks.Items)
 
 	// Convert directly to reconcile requests since the field indexer already filtered for us
 	requests := make([]reconcile.Request, 0, len(attachedLlamaStacks.Items))
