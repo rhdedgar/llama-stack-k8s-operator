@@ -324,7 +324,16 @@ func (r *LlamaStackDistributionReconciler) configMapCreatePredicate(e event.Crea
 	if !ok {
 		return false
 	}
-	return r.isConfigMapReferenced(configMap)
+
+	isReferenced := r.isConfigMapReferenced(configMap)
+	// Log create events for referenced ConfigMaps
+	if isReferenced {
+		log.FromContext(context.Background()).Info("ConfigMap create event detected for referenced ConfigMap",
+			"configMapName", configMap.Name,
+			"configMapNamespace", configMap.Namespace)
+	}
+
+	return isReferenced
 }
 
 // configMapDeletePredicate handles ConfigMap delete events.
@@ -333,11 +342,25 @@ func (r *LlamaStackDistributionReconciler) configMapDeletePredicate(e event.Dele
 	if !ok {
 		return false
 	}
-	return r.isConfigMapReferenced(configMap)
+
+	isReferenced := r.isConfigMapReferenced(configMap)
+	// Log delete events for referenced ConfigMaps - this is critical for deployment health
+	if isReferenced {
+		log.FromContext(context.Background()).Error(nil,
+			"CRITICAL: ConfigMap delete event detected for referenced ConfigMap - this will break dependent deployments",
+			"configMapName", configMap.Name,
+			"configMapNamespace", configMap.Namespace)
+	}
+
+	return isReferenced
 }
 
 // isConfigMapReferenced checks if a ConfigMap is referenced by any LlamaStackDistribution.
 func (r *LlamaStackDistributionReconciler) isConfigMapReferenced(configMap client.Object) bool {
+	logger := log.FromContext(context.Background()).WithValues(
+		"configMapName", configMap.GetName(),
+		"configMapNamespace", configMap.GetNamespace())
+
 	// Use field indexer for efficient lookup - create the same index key format
 	indexKey := fmt.Sprintf("%s/%s", configMap.GetNamespace(), configMap.GetName())
 
@@ -345,8 +368,10 @@ func (r *LlamaStackDistributionReconciler) isConfigMapReferenced(configMap clien
 
 	err := r.List(context.Background(), &attachedLlamaStacks, client.MatchingFields{"spec.server.userConfig.configMapName": indexKey})
 	if err != nil {
-		// If we can't check, err on the side of caution and assume it's not referenced
-		return false
+		// CRITICAL ERROR: If we can't check references, we must log this as a critical error
+		// and err on the side of caution by assuming it IS referenced to trigger reconciliation
+		logger.Error(err, "CRITICAL: Failed to list LlamaStackDistributions for ConfigMap reference check - assuming ConfigMap is referenced to prevent missing reconciliation events")
+		return true // Return true to trigger reconciliation when we can't determine reference status
 	}
 
 	found := len(attachedLlamaStacks.Items) > 0
@@ -364,11 +389,15 @@ func (r *LlamaStackDistributionReconciler) isConfigMapReferenced(configMap clien
 
 // manuallyCheckConfigMapReference manually checks if any LlamaStackDistribution references the given ConfigMap.
 func (r *LlamaStackDistributionReconciler) manuallyCheckConfigMapReference(configMap client.Object) bool {
+	logger := log.FromContext(context.Background()).WithValues(
+		"configMapName", configMap.GetName(),
+		"configMapNamespace", configMap.GetNamespace())
+
 	allLlamaStacks := llamav1alpha1.LlamaStackDistributionList{}
 	err := r.List(context.Background(), &allLlamaStacks)
 	if err != nil {
-		log.FromContext(context.Background()).Error(err, "Failed to list all LlamaStackDistributions for manual check")
-		return false
+		logger.Error(err, "CRITICAL: Failed to list all LlamaStackDistributions for manual ConfigMap reference check - assuming ConfigMap is referenced")
+		return true // Return true to trigger reconciliation when we can't determine reference status
 	}
 
 	targetNamespace := configMap.GetNamespace()
@@ -406,12 +435,17 @@ func (r *LlamaStackDistributionReconciler) findLlamaStackDistributionsForConfigM
 
 // tryFieldIndexerLookup attempts to find LlamaStackDistributions using the field indexer.
 func (r *LlamaStackDistributionReconciler) tryFieldIndexerLookup(ctx context.Context, configMap client.Object) (llamav1alpha1.LlamaStackDistributionList, bool) {
+	logger := log.FromContext(ctx).WithValues(
+		"configMapName", configMap.GetName(),
+		"configMapNamespace", configMap.GetNamespace())
+
 	indexKey := fmt.Sprintf("%s/%s", configMap.GetNamespace(), configMap.GetName())
 
 	attachedLlamaStacks := llamav1alpha1.LlamaStackDistributionList{}
 	err := r.List(ctx, &attachedLlamaStacks, client.MatchingFields{"spec.server.userConfig.configMapName": indexKey})
 	if err != nil {
-		fmt.Printf("failed to list LlamaStackDistributions using field indexer %v, indexKey: %s\n", err, indexKey)
+		logger.Error(err, "CRITICAL: Failed to list LlamaStackDistributions using field indexer for ConfigMap event processing",
+			"indexKey", indexKey)
 		return attachedLlamaStacks, false
 	}
 
@@ -420,10 +454,14 @@ func (r *LlamaStackDistributionReconciler) tryFieldIndexerLookup(ctx context.Con
 
 // performManualSearch performs a manual search and filtering when field indexer returns no results.
 func (r *LlamaStackDistributionReconciler) performManualSearch(ctx context.Context, configMap client.Object) llamav1alpha1.LlamaStackDistributionList {
+	logger := log.FromContext(ctx).WithValues(
+		"configMapName", configMap.GetName(),
+		"configMapNamespace", configMap.GetNamespace())
+
 	allLlamaStacks := llamav1alpha1.LlamaStackDistributionList{}
 	err := r.List(ctx, &allLlamaStacks)
 	if err != nil {
-		fmt.Printf("failed to list all LlamaStackDistributions for manual search: %v\n", err)
+		logger.Error(err, "CRITICAL: Failed to list all LlamaStackDistributions for manual ConfigMap reference search")
 		return allLlamaStacks
 	}
 

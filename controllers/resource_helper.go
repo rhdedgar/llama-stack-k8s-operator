@@ -133,14 +133,32 @@ func configurePodStorage(instance *llamav1alpha1.LlamaStackDistribution, contain
 		})
 	}
 
-	// Add any pod overrides
-	if instance.Spec.Server.PodOverrides != nil {
-		podSpec.Volumes = append(podSpec.Volumes, instance.Spec.Server.PodOverrides.Volumes...)
-		container.VolumeMounts = append(container.VolumeMounts, instance.Spec.Server.PodOverrides.VolumeMounts...)
-		podSpec.Containers[0] = container // Update with volume mounts
-	}
+	// Apply pod overrides including ServiceAccount, volumes, and volume mounts
+	configurePodOverrides(instance, &podSpec)
 
 	return podSpec
+}
+
+// configurePodOverrides applies pod-level overrides from the LlamaStackDistribution spec.
+func configurePodOverrides(instance *llamav1alpha1.LlamaStackDistribution, podSpec *corev1.PodSpec) {
+	if instance.Spec.Server.PodOverrides != nil {
+		// Set ServiceAccount name if specified
+		if instance.Spec.Server.PodOverrides.ServiceAccountName != "" {
+			podSpec.ServiceAccountName = instance.Spec.Server.PodOverrides.ServiceAccountName
+		}
+
+		// Add volumes if specified
+		if len(instance.Spec.Server.PodOverrides.Volumes) > 0 {
+			podSpec.Volumes = append(podSpec.Volumes, instance.Spec.Server.PodOverrides.Volumes...)
+		}
+
+		// Add volume mounts if specified
+		if len(instance.Spec.Server.PodOverrides.VolumeMounts) > 0 {
+			if len(podSpec.Containers) > 0 {
+				podSpec.Containers[0].VolumeMounts = append(podSpec.Containers[0].VolumeMounts, instance.Spec.Server.PodOverrides.VolumeMounts...)
+			}
+		}
+	}
 }
 
 // validateDistribution validates the distribution configuration.
