@@ -311,11 +311,44 @@ func (r *LlamaStackDistributionReconciler) configMapUpdatePredicate(e event.Upda
 		return false
 	}
 
+	// Only proceed if this ConfigMap is referenced by any LlamaStackDistribution
+	if !r.isConfigMapReferenced(newConfigMap) {
+		return false
+	}
+
 	// Only trigger if Data or BinaryData has changed
 	dataChanged := !cmp.Equal(oldConfigMap.Data, newConfigMap.Data)
 	binaryDataChanged := !cmp.Equal(oldConfigMap.BinaryData, newConfigMap.BinaryData)
 
+	// Log ConfigMap changes for debugging (only for referenced ConfigMaps)
+	if dataChanged || binaryDataChanged {
+		r.logConfigMapDiff(oldConfigMap, newConfigMap, dataChanged, binaryDataChanged)
+	}
+
 	return dataChanged || binaryDataChanged
+}
+
+// logConfigMapDiff logs the differences between old and new ConfigMaps.
+func (r *LlamaStackDistributionReconciler) logConfigMapDiff(oldConfigMap, newConfigMap *corev1.ConfigMap, dataChanged, binaryDataChanged bool) {
+	logger := log.FromContext(context.Background()).WithValues(
+		"configMapName", newConfigMap.Name,
+		"configMapNamespace", newConfigMap.Namespace)
+
+	logger.Info("Referenced ConfigMap change detected")
+
+	if dataChanged {
+		if dataDiff := cmp.Diff(oldConfigMap.Data, newConfigMap.Data); dataDiff != "" {
+			logger.Info("ConfigMap Data changed")
+			fmt.Printf("ConfigMap %s/%s Data diff:\n%s\n", newConfigMap.Namespace, newConfigMap.Name, dataDiff)
+		}
+	}
+
+	if binaryDataChanged {
+		if binaryDataDiff := cmp.Diff(oldConfigMap.BinaryData, newConfigMap.BinaryData); binaryDataDiff != "" {
+			logger.Info("ConfigMap BinaryData changed")
+			fmt.Printf("ConfigMap %s/%s BinaryData diff:\n%s\n", newConfigMap.Namespace, newConfigMap.Name, binaryDataDiff)
+		}
+	}
 }
 
 // configMapCreatePredicate handles ConfigMap create events.
