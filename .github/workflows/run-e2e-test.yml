@@ -83,6 +83,19 @@ jobs:
             exit 1
           fi
 
+      - name: Generate certificates
+        run: |
+          ./config/samples/generate_certificates.sh
+
+      - name: Create vllm-ca-certs secret
+        run: |
+          kubectl create secret generic vllm-ca-certs --from-file=vllm-ca-certs/
+
+      - name: Create vllm-certs secret
+        run: |
+          kubectl create secret generic vllm-certs --from-file=vllm-certs/
+
+
       - name: Run e2e tests
         run: |
           make test-e2e

@@ -82,6 +82,27 @@ func buildContainerSpec(instance *llamav1alpha1.LlamaStackDistribution, image st
 		container.Args = []string{"--config", "/etc/llama-stack/run.yaml"}
 	}
 
+	// Add CA bundle volume mount if TLS config is specified
+	if instance.Spec.Server.TLSConfig != nil && instance.Spec.Server.TLSConfig.CABundle != nil {
+		caBundleKey := instance.Spec.Server.TLSConfig.CABundle.Key
+		if caBundleKey == "" {
+			caBundleKey = "ca-bundle.crt"
+		}
+
+		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
+			Name:      "ca-bundle",
+			MountPath: "/etc/ssl/certs/" + caBundleKey,
+			SubPath:   caBundleKey,
+			ReadOnly:  true,
+		})
+
+		// Set SSL_CERT_FILE environment variable to point to the CA bundle
+		container.Env = append(container.Env, corev1.EnvVar{
+			Name:  "SSL_CERT_FILE",
+			Value: "/etc/ssl/certs/" + caBundleKey,
+		})
+	}
+
 	if len(instance.Spec.Server.ContainerSpec.Command) > 0 {
 		container.Command = instance.Spec.Server.ContainerSpec.Command
 	}
@@ -127,6 +148,20 @@ func configurePodStorage(instance *llamav1alpha1.LlamaStackDistribution, contain
 				ConfigMap: &corev1.ConfigMapVolumeSource{
 					LocalObjectReference: corev1.LocalObjectReference{
 						Name: instance.Spec.Server.UserConfig.ConfigMapName,
+					},
+				},
+			},
+		})
+	}
+
+	// Add CA bundle ConfigMap volume if TLS config is specified
+	if instance.Spec.Server.TLSConfig != nil && instance.Spec.Server.TLSConfig.CABundle != nil {
+		podSpec.Volumes = append(podSpec.Volumes, corev1.Volume{
+			Name: "ca-bundle",
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: instance.Spec.Server.TLSConfig.CABundle.ConfigMapName,
 					},
 				},
 			},
