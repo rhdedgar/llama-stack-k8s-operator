@@ -74,11 +74,14 @@ echo "------------------------------------"
 # Clean up the server's CSR as it is no longer needed
 rm "${SERVER_CSR}"
 
-mkdir vllm-certs
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-cp "${SERVER_CERT}" vllm-certs/
-cp "${SERVER_KEY}" vllm-certs/
+mkdir -p "${SCRIPT_DIR}/vllm-certs"
 
-mkdir vllm-ca-certs
+cp "${SERVER_CERT}" "${SCRIPT_DIR}/vllm-certs/"
+cp "${SERVER_KEY}" "${SCRIPT_DIR}/vllm-certs/"
 
-cp "${CA_BUNDLE}" vllm-ca-certs/
+mkdir -p "${SCRIPT_DIR}/vllm-ca-certs"
+
+cp "${CA_BUNDLE}" "${SCRIPT_DIR}/vllm-ca-certs/"
