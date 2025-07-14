@@ -3,6 +3,7 @@ package e2e
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -199,8 +200,8 @@ func copyTLSSecretsToNamespace(t *testing.T, targetNS string) error {
 		},
 		Type: corev1.SecretTypeOpaque,
 		Data: map[string][]byte{
-			"server.crt": []byte{}, // Will be populated by certificate generation
-			"server.key": []byte{}, // Will be populated by certificate generation
+			"server.crt": {}, // Will be populated by certificate generation
+			"server.key": {}, // Will be populated by certificate generation
 		},
 	}
 
@@ -403,24 +404,25 @@ func validateVLLMProviderStatus(t *testing.T) error {
 		if provider.ProviderID == "vllm" {
 			vllmProviderFound = true
 			if provider.Health.Status != "OK" {
-				return fmt.Errorf("vLLM provider is not healthy: %s - %s", provider.Health.Status, provider.Health.Message)
+				return fmt.Errorf("failed to reach a healthy vLLM provider: %s - %s", provider.Health.Status, provider.Health.Message)
 			}
 			break
 		}
 	}
 
 	if !vllmProviderFound {
-		return fmt.Errorf("vLLM provider not found in distribution status")
+		return errors.New("failed to find vLLM provider in distribution status")
 	}
 
 	return nil
 }
 
 func parseKubernetesYAML(data []byte) ([]client.Object, error) {
-	var objects []client.Object
-
 	// Split YAML documents
 	docs := yamlSplit(data)
+
+	// Pre-allocate slice with expected capacity
+	objects := make([]client.Object, 0, len(docs))
 
 	for _, doc := range docs {
 		if len(doc) == 0 {

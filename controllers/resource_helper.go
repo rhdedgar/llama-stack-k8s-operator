@@ -27,29 +27,40 @@ import (
 // buildContainerSpec creates the container specification.
 func buildContainerSpec(instance *llamav1alpha1.LlamaStackDistribution, image string) corev1.Container {
 	container := corev1.Container{
-		Name:            llamav1alpha1.DefaultContainerName,
+		Name:            getContainerName(instance),
 		Image:           image,
 		Resources:       instance.Spec.Server.ContainerSpec.Resources,
 		ImagePullPolicy: corev1.PullAlways,
+		Ports:           []corev1.ContainerPort{{ContainerPort: getContainerPort(instance)}},
 	}
 
+	// Configure environment variables and mounts
+	configureContainerEnvironment(instance, &container)
+	configureContainerMounts(instance, &container)
+	configureContainerCommands(instance, &container)
+
+	return container
+}
+
+// getContainerName returns the container name, using custom name if specified.
+func getContainerName(instance *llamav1alpha1.LlamaStackDistribution) string {
 	if instance.Spec.Server.ContainerSpec.Name != "" {
-		container.Name = instance.Spec.Server.ContainerSpec.Name
+		return instance.Spec.Server.ContainerSpec.Name
 	}
+	return llamav1alpha1.DefaultContainerName
+}
 
-	port := llamav1alpha1.DefaultServerPort
+// getContainerPort returns the container port, using custom port if specified.
+func getContainerPort(instance *llamav1alpha1.LlamaStackDistribution) int32 {
 	if instance.Spec.Server.ContainerSpec.Port != 0 {
-		port = instance.Spec.Server.ContainerSpec.Port
+		return instance.Spec.Server.ContainerSpec.Port
 	}
-	container.Ports = []corev1.ContainerPort{{ContainerPort: port}}
+	return llamav1alpha1.DefaultServerPort
+}
 
-	mountPath := llamav1alpha1.DefaultMountPath
-	if instance.Spec.Server.Storage != nil {
-		// Determine mount path
-		if instance.Spec.Server.Storage.MountPath != "" {
-			mountPath = instance.Spec.Server.Storage.MountPath
-		}
-	}
+// configureContainerEnvironment sets up environment variables for the container.
+func configureContainerEnvironment(instance *llamav1alpha1.LlamaStackDistribution, container *corev1.Container) {
+	mountPath := getMountPath(instance)
 
 	// Add HF_HOME variable to our mount path so that downloaded models and datasets are stored
 	// on the same volume as the storage. This is not critical but useful if the server is
@@ -60,8 +71,26 @@ func buildContainerSpec(instance *llamav1alpha1.LlamaStackDistribution, image st
 		Value: mountPath,
 	})
 
+	// Add CA bundle environment variable if TLS config is specified
+	if instance.Spec.Server.TLSConfig != nil && instance.Spec.Server.TLSConfig.CABundle != nil {
+		caBundleKey := instance.Spec.Server.TLSConfig.CABundle.Key
+		if caBundleKey == "" {
+			caBundleKey = "ca-bundle.crt"
+		}
+
+		container.Env = append(container.Env, corev1.EnvVar{
+			Name:  "SSL_CERT_FILE",
+			Value: "/etc/ssl/certs/" + caBundleKey,
+		})
+	}
+
 	// Finally, add the user provided env vars
 	container.Env = append(container.Env, instance.Spec.Server.ContainerSpec.Env...)
+}
+
+// configureContainerMounts sets up volume mounts for the container.
+func configureContainerMounts(instance *llamav1alpha1.LlamaStackDistribution, container *corev1.Container) {
+	mountPath := getMountPath(instance)
 
 	// Add volume mount for storage
 	container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
@@ -76,10 +105,6 @@ func buildContainerSpec(instance *llamav1alpha1.LlamaStackDistribution, image st
 			MountPath: "/etc/llama-stack/",
 			ReadOnly:  true,
 		})
-
-		// Override the container entrypoint to use the custom config file instead of the default template
-		container.Command = []string{"python", "-m", "llama_stack.distribution.server.server"}
-		container.Args = []string{"--config", "/etc/llama-stack/run.yaml"}
 	}
 
 	// Add CA bundle volume mount if TLS config is specified
@@ -95,14 +120,18 @@ func buildContainerSpec(instance *llamav1alpha1.LlamaStackDistribution, image st
 			SubPath:   caBundleKey,
 			ReadOnly:  true,
 		})
+	}
+}
 
-		// Set SSL_CERT_FILE environment variable to point to the CA bundle
-		container.Env = append(container.Env, corev1.EnvVar{
-			Name:  "SSL_CERT_FILE",
-			Value: "/etc/ssl/certs/" + caBundleKey,
-		})
+// configureContainerCommands sets up container commands and args.
+func configureContainerCommands(instance *llamav1alpha1.LlamaStackDistribution, container *corev1.Container) {
+	// Override the container entrypoint to use the custom config file if user config is specified
+	if instance.Spec.Server.UserConfig != nil && instance.Spec.Server.UserConfig.ConfigMapName != "" {
+		container.Command = []string{"python", "-m", "llama_stack.distribution.server.server"}
+		container.Args = []string{"--config", "/etc/llama-stack/run.yaml"}
 	}
 
+	// Apply user-specified command and args (takes precedence)
 	if len(instance.Spec.Server.ContainerSpec.Command) > 0 {
 		container.Command = instance.Spec.Server.ContainerSpec.Command
 	}
@@ -110,7 +139,14 @@ func buildContainerSpec(instance *llamav1alpha1.LlamaStackDistribution, image st
 	if len(instance.Spec.Server.ContainerSpec.Args) > 0 {
 		container.Args = instance.Spec.Server.ContainerSpec.Args
 	}
-	return container
+}
+
+// getMountPath returns the mount path, using custom path if specified.
+func getMountPath(instance *llamav1alpha1.LlamaStackDistribution) string {
+	if instance.Spec.Server.Storage != nil && instance.Spec.Server.Storage.MountPath != "" {
+		return instance.Spec.Server.Storage.MountPath
+	}
+	return llamav1alpha1.DefaultMountPath
 }
 
 // configurePodStorage configures the pod storage and returns the complete pod spec.

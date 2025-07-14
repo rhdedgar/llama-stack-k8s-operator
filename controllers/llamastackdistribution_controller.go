@@ -56,6 +56,7 @@ import (
 const (
 	operatorConfigData = "llama-stack-operator-config"
 	manifestsBasePath  = "manifests/base"
+	caBundleKey        = "ca-bundle.crt"
 )
 
 // LlamaStackDistributionReconciler reconciles a LlamaStack object.
@@ -203,29 +204,14 @@ func (r *LlamaStackDistributionReconciler) fetchInstance(ctx context.Context, na
 
 // reconcileResources reconciles all resources for the LlamaStackDistribution instance.
 func (r *LlamaStackDistributionReconciler) reconcileResources(ctx context.Context, instance *llamav1alpha1.LlamaStackDistribution) error {
-	// Reconcile the ConfigMap if specified by the user
-	if r.hasUserConfigMap(instance) {
-		if err := r.reconcileUserConfigMap(ctx, instance); err != nil {
-			return fmt.Errorf("failed to reconcile user ConfigMap: %w", err)
-		}
+	// Reconcile ConfigMaps
+	if err := r.reconcileConfigMaps(ctx, instance); err != nil {
+		return err
 	}
 
-	// Reconcile the CA bundle ConfigMap if specified
-	if r.hasCABundleConfigMap(instance) {
-		if err := r.reconcileCABundleConfigMap(ctx, instance); err != nil {
-			return fmt.Errorf("failed to reconcile CA bundle ConfigMap: %w", err)
-		}
-	}
-
-	// Reconcile the PVC if storage is configured
-	if instance.Spec.Server.Storage != nil {
-		resMap, err := deploy.RenderManifest(filesys.MakeFsOnDisk(), manifestsBasePath, instance)
-		if err != nil {
-			return fmt.Errorf("failed to render PVC manifests: %w", err)
-		}
-		if err := deploy.ApplyResources(ctx, r.Client, r.Scheme, instance, resMap); err != nil {
-			return fmt.Errorf("failed to apply PVC manifests: %w", err)
-		}
+	// Reconcile storage
+	if err := r.reconcileStorage(ctx, instance); err != nil {
+		return err
 	}
 
 	// Reconcile the NetworkPolicy
@@ -244,6 +230,39 @@ func (r *LlamaStackDistributionReconciler) reconcileResources(ctx context.Contex
 			return fmt.Errorf("failed to reconcile service: %w", err)
 		}
 	}
+	return nil
+}
+
+func (r *LlamaStackDistributionReconciler) reconcileConfigMaps(ctx context.Context, instance *llamav1alpha1.LlamaStackDistribution) error {
+	// Reconcile the ConfigMap if specified by the user
+	if r.hasUserConfigMap(instance) {
+		if err := r.reconcileUserConfigMap(ctx, instance); err != nil {
+			return fmt.Errorf("failed to reconcile user ConfigMap: %w", err)
+		}
+	}
+
+	// Reconcile the CA bundle ConfigMap if specified
+	if r.hasCABundleConfigMap(instance) {
+		if err := r.reconcileCABundleConfigMap(ctx, instance); err != nil {
+			return fmt.Errorf("failed to reconcile CA bundle ConfigMap: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func (r *LlamaStackDistributionReconciler) reconcileStorage(ctx context.Context, instance *llamav1alpha1.LlamaStackDistribution) error {
+	// Reconcile the PVC if storage is configured
+	if instance.Spec.Server.Storage != nil {
+		resMap, err := deploy.RenderManifest(filesys.MakeFsOnDisk(), manifestsBasePath, instance)
+		if err != nil {
+			return fmt.Errorf("failed to render PVC manifests: %w", err)
+		}
+		if err := deploy.ApplyResources(ctx, r.Client, r.Scheme, instance, resMap); err != nil {
+			return fmt.Errorf("failed to apply PVC manifests: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -1149,23 +1168,23 @@ func (r *LlamaStackDistributionReconciler) reconcileCABundleConfigMap(ctx contex
 	}
 
 	// Validate that the specified key exists in the ConfigMap
-	caBundleKey := instance.Spec.Server.TLSConfig.CABundle.Key
-	if caBundleKey == "" {
-		caBundleKey = "ca-bundle.crt"
+	specCABundleKey := instance.Spec.Server.TLSConfig.CABundle.Key
+	if specCABundleKey == "" {
+		specCABundleKey = caBundleKey
 	}
 
-	if _, exists := configMap.Data[caBundleKey]; !exists {
+	if _, exists := configMap.Data[specCABundleKey]; !exists {
 		logger.Error(err, "CA bundle key not found in ConfigMap",
 			"configMapName", instance.Spec.Server.TLSConfig.CABundle.ConfigMapName,
 			"configMapNamespace", configMapNamespace,
-			"key", caBundleKey)
-		return fmt.Errorf("CA bundle key '%s' not found in ConfigMap %s/%s", caBundleKey, configMapNamespace, instance.Spec.Server.TLSConfig.CABundle.ConfigMapName)
+			"key", specCABundleKey)
+		return fmt.Errorf("failed to find CA bundle key '%s' in ConfigMap %s/%s", specCABundleKey, configMapNamespace, instance.Spec.Server.TLSConfig.CABundle.ConfigMapName)
 	}
 
 	logger.V(1).Info("CA bundle ConfigMap found and validated",
 		"configMap", configMap.Name,
 		"namespace", configMap.Namespace,
-		"key", caBundleKey,
+		"key", specCABundleKey,
 		"dataKeys", len(configMap.Data))
 	return nil
 }
