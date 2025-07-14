@@ -96,7 +96,7 @@ jobs:
           # Apply the Kubernetes-compatible vLLM deployment
           kubectl apply -f config/samples/vllm-k8s.yaml
 
-          # Create vllm-certs secret
+          # Create vllm-certs secret in the vLLM namespace
           kubectl create secret generic vllm-certs --from-file=./config/samples/vllm-certs/ --namespace vllm-dist
 
           # Wait for vLLM deployment to be ready

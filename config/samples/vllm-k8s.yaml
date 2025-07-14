@@ -77,13 +77,3 @@ spec:
     port: 8000
     targetPort: 8000
   type: ClusterIP
-#---
-#apiVersion: v1
-#kind: Secret
-#metadata:
-#  name: hf-token-secret
-#  namespace: vllm-dist
-#type: Opaque
-#data:
-#  # This is a placeholder token for testing - "dummy-token" encoded in base64
-#  token: ZHVtbXktdG9rZW4= 
