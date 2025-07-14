@@ -21,23 +21,13 @@ spec:
     spec:
       containers:
       - name: vllm
-        #image: quay.io/dedgar/vllm:v0.0.1
-        image: leseb/vllm-aed8468-with-models
+        image: quay.io/dedgar/vllm:v0.0.1
+        #image: leseb/vllm-aed8468-with-models
         command: ["/bin/sh", "-c"]
         args: [
           "vllm serve meta-llama/Llama-3.2-1B-Instruct --ssl-keyfile /etc/ssl/certs/server.key --ssl-certfile /etc/ssl/certs/server.crt --host 0.0.0.0 --port 8000"
         ]
         env:
-        #- name: HUGGING_FACE_HUB_TOKEN
-        #  valueFrom:
-        #    secretKeyRef:
-        #      name: hf-token-secret
-        #      key: token
-        #- name: HF_TOKEN
-        #  valueFrom:
-        #    secretKeyRef:
-        #      name: hf-token-secret
-        #      key: token
         - name: VLLM_CPU_KVCACHE_SPACE
           value: "10"
         - name: VLLM_TARGET_DEVICE
