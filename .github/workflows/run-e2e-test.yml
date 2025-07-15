@@ -95,6 +95,11 @@ jobs:
           kubectl -n llama-stack-test describe all > all-describe.log
           kubectl -n llama-stack-test describe events > events.log
           kubectl get llamastackdistributions --all-namespaces -o yaml > llamastackdistributions.log
+          # Get vLLM logs
+          kubectl -n vllm-dist get all -o yaml > vllm-all.log
+          kubectl -n vllm-dist logs deployment/vllm-server > vllm-server.log
+          kubectl -n vllm-dist describe all > vllm-describe.log
+          kubectl -n vllm-dist describe events > vllm-events.log
 
       - name: Upload all logs to artifacts
         if: ${{ always() }}
