@@ -78,9 +78,16 @@ func configureContainerEnvironment(instance *llamav1alpha1.LlamaStackDistributio
 			caBundleKey = "ca-bundle.crt"
 		}
 
+		// Set SSL_CERT_FILE to point to the specific CA bundle file
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name:  "SSL_CERT_FILE",
 			Value: "/etc/ssl/certs/" + caBundleKey,
+		})
+
+		// Also set SSL_CERT_DIR for applications that prefer directory-based CA lookup
+		container.Env = append(container.Env, corev1.EnvVar{
+			Name:  "SSL_CERT_DIR",
+			Value: "/etc/ssl/certs",
 		})
 	}
 
