@@ -202,6 +202,33 @@ spec:
 3. **Invalid Certificate**: Verify the certificate format is correct (PEM format)
 4. **Pod Not Restarting**: ConfigMap changes trigger automatic pod restarts via annotations
 
+### Common Error Messages and Solutions
+
+#### "CA bundle key not found in ConfigMap"
+- **Cause**: The specified key doesn't exist in the ConfigMap data
+- **Solution**: Check the key name in your LlamaStackDistribution spec, default is "ca-bundle.crt"
+- **Example**: Verify `kubectl get configmap my-ca-bundle -o yaml` shows your expected key
+
+#### "Invalid CA bundle format"
+- **Cause**: The certificate data is not in valid PEM format or contains invalid certificates
+- **Solution**: Ensure certificates are properly formatted with BEGIN/END CERTIFICATE blocks
+- **Example**: Valid format starts with `-----BEGIN CERTIFICATE-----`
+
+#### "Referenced CA bundle ConfigMap not found"
+- **Cause**: The ConfigMap specified in tlsConfig.caBundle.configMapName doesn't exist
+- **Solution**: Create the ConfigMap first, then apply the LlamaStackDistribution
+- **Example**: `kubectl create configmap my-ca-bundle --from-file=ca-bundle.crt=my-ca.crt`
+
+#### "No valid certificates found in CA bundle"
+- **Cause**: The ConfigMap contains data but no parseable certificates
+- **Solution**: Verify certificate content and format
+- **Example**: Use `openssl x509 -text -noout -in your-cert.crt` to validate certificates
+
+#### "Failed to parse certificate"
+- **Cause**: Certificate data is corrupted or not a valid X.509 certificate
+- **Solution**: Regenerate the certificate or verify the source
+- **Example**: Check if the certificate was properly base64 encoded
+
 ### Debugging
 
 ```bash
@@ -216,14 +243,36 @@ kubectl exec <llama-stack-pod-name> -- ls -la /etc/ssl/certs/
 
 # Check SSL_CERT_FILE environment variable
 kubectl exec <llama-stack-pod-name> -- env | grep SSL_CERT_FILE
+
+# Validate certificate format locally
+openssl x509 -text -noout -in ca-bundle.crt
+
+# Check certificate expiration
+openssl x509 -enddate -noout -in ca-bundle.crt
+
+# Test certificate chain
+openssl verify -CAfile ca-bundle.crt server.crt
 ```
+
+### Validation Checklist
+
+Before deploying a LlamaStackDistribution with CA bundle:
+
+- [ ] ConfigMap exists in the correct namespace
+- [ ] ConfigMap contains the specified key (default: "ca-bundle.crt")
+- [ ] Certificate data is in PEM format
+- [ ] Certificate data contains valid X.509 certificates
+- [ ] Operator has read permissions on the ConfigMap
+- [ ] Certificate is not expired
+- [ ] Certificate contains the expected CA for your external service
 
 ## Security Considerations
 
 1. **ConfigMap Security**: ConfigMaps are stored in plain text in etcd. Consider using appropriate RBAC policies
 2. **Certificate Rotation**: Update ConfigMaps when certificates expire or are rotated
 3. **Namespace Isolation**: Use appropriate namespaces to isolate CA bundles
-4. **Principle of Least Privilege**: Only include necessary CA certificates in the bundle
+4. **Audit Trail**: Monitor ConfigMap changes in production environments
+5. **Principle of Least Privilege**: Only grant necessary permissions to access CA bundle ConfigMaps
 
 ## Limitations
 
