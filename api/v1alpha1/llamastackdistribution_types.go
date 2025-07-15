@@ -82,6 +82,9 @@ type ServerSpec struct {
 	// UserConfig defines the user configuration for the llama-stack server
 	// +optional
 	UserConfig *UserConfigSpec `json:"userConfig,omitempty"`
+	// TLSConfig defines the TLS configuration for the llama-stack server
+	// +optional
+	TLSConfig *TLSConfig `json:"tlsConfig,omitempty"`
 }
 
 type UserConfigSpec struct {
@@ -90,6 +93,26 @@ type UserConfigSpec struct {
 	// ConfigMapNamespace is the namespace of the ConfigMap (defaults to the same namespace as the CR)
 	// +optional
 	ConfigMapNamespace string `json:"configMapNamespace,omitempty"`
+}
+
+// TLSConfig defines the TLS configuration for the llama-stack server
+type TLSConfig struct {
+	// CABundle defines the CA bundle configuration for custom certificates
+	// +optional
+	CABundle *CABundleConfig `json:"caBundle,omitempty"`
+}
+
+// CABundleConfig defines the CA bundle configuration for custom certificates
+type CABundleConfig struct {
+	// ConfigMapName is the name of the ConfigMap containing CA bundle certificates
+	ConfigMapName string `json:"configMapName"`
+	// ConfigMapNamespace is the namespace of the ConfigMap (defaults to the same namespace as the CR)
+	// +optional
+	ConfigMapNamespace string `json:"configMapNamespace,omitempty"`
+	// ConfigMapKey is the key within the ConfigMap that contains the CA bundle data (defaults to "ca-bundle.crt")
+	// +optional
+	// +kubebuilder:default:="ca-bundle.crt"
+	ConfigMapKey string `json:"configMapKey,omitempty"`
 }
 
 // StorageSpec defines the persistent storage configuration
@@ -190,6 +213,8 @@ type LlamaStackDistributionStatus struct {
 //+kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 //+kubebuilder:selectablefield:JSONPath=".spec.server.userConfig.configMapName"
 //+kubebuilder:selectablefield:JSONPath=".spec.server.userConfig.configMapNamespace"
+//+kubebuilder:selectablefield:JSONPath=".spec.server.tlsConfig.caBundle.configMapName"
+//+kubebuilder:selectablefield:JSONPath=".spec.server.tlsConfig.caBundle.configMapNamespace"
 // LlamaStackDistribution is the Schema for the llamastackdistributions API
 
 type LlamaStackDistribution struct {
