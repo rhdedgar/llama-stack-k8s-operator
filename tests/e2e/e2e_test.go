@@ -19,6 +19,11 @@ func TestE2E(t *testing.T) {
 		creationFailed = t.Failed()
 	})
 
+	// Run vLLM TLS tests
+	t.Run("vllm-tls", func(t *testing.T) {
+		TestVLLMTLSSuite(t)
+	})
+
 	// Run deletion tests only if creation passed
 	if !creationFailed {
 		t.Run("deletion", TestDeletionSuite)

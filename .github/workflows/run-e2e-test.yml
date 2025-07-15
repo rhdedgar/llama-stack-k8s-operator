@@ -83,6 +83,28 @@ jobs:
             exit 1
           fi
 
+      - name: Generate certificates
+        run: |
+          ./config/samples/generate_certificates.sh
+
+      - name: Create vllm-ca-certs secret
+        run: |
+          kubectl create secret generic vllm-ca-certs --from-file=./config/samples/vllm-ca-certs/
+
+      - name: Deploy vLLM server for TLS testing
+        run: |
+          # Apply the Kubernetes-compatible vLLM deployment
+          kubectl apply -f config/samples/vllm-k8s.yaml
+
+          # Create vllm-certs secret in the vLLM namespace
+          kubectl create secret generic vllm-certs --from-file=./config/samples/vllm-certs/ --namespace vllm-dist
+
+          # Wait for vLLM deployment to be ready
+          kubectl wait --for=condition=available --timeout=600s deployment/vllm-server --namespace vllm-dist
+
+          # Wait for vLLM pods to be ready
+          kubectl wait --for=condition=ready --timeout=600s pod -l app.kubernetes.io/name=vllm --namespace vllm-dist
+
       - name: Run e2e tests
         run: |
           make test-e2e
@@ -95,6 +117,11 @@ jobs:
           kubectl -n llama-stack-test describe all > all-describe.log
           kubectl -n llama-stack-test describe events > events.log
           kubectl get llamastackdistributions --all-namespaces -o yaml > llamastackdistributions.log
+          # Get vLLM logs
+          kubectl -n vllm-dist get all -o yaml > vllm-all.log
+          kubectl -n vllm-dist logs deployment/vllm-server > vllm-server.log
+          kubectl -n vllm-dist describe all > vllm-describe.log
+          kubectl -n vllm-dist describe events > vllm-events.log
 
       - name: Upload all logs to artifacts
         if: ${{ always() }}
