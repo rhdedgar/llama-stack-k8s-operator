@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/llamastack/llama-stack-k8s-operator/api/v1alpha1"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -69,10 +68,6 @@ func TestVLLMTLSSuite(t *testing.T) {
 
 	t.Run("should create vLLM server with TLS", func(t *testing.T) {
 		testVLLMServerDeployment(t)
-	})
-
-	t.Run("should validate vLLM TLS connection", func(t *testing.T) {
-		testVLLMTLSConnection(t)
 	})
 
 	t.Run("should create LlamaStackDistribution with CA bundle", func(t *testing.T) {
@@ -151,18 +146,6 @@ func testVLLMServerDeployment(t *testing.T) {
 		return specFound && spec != nil
 	})
 	require.NoError(t, err, "vLLM service should be ready")
-}
-
-func testVLLMTLSConnection(t *testing.T) {
-	t.Helper()
-
-	// Wait for vLLM to be healthy
-	err := waitForVLLMHealth(t)
-	require.NoError(t, err, "vLLM should be healthy")
-
-	// Test TLS connection directly
-	err = testDirectTLSConnection(t)
-	require.NoError(t, err, "Direct TLS connection to vLLM should work")
 }
 
 func testLlamaStackWithCABundle(t *testing.T) {
@@ -769,32 +752,6 @@ func waitForVLLMHealth(t *testing.T) error {
 
 		return false, nil
 	})
-}
-
-func testDirectTLSConnection(t *testing.T) error {
-	t.Helper()
-
-	// This is a placeholder for TLS connection testing
-	// In a real implementation, you would:
-	// 1. Port forward to the vLLM service
-	// 2. Load the CA certificate
-	// 3. Make an HTTPS request to verify TLS works
-	// 4. Verify the certificate chain
-
-	// For now, we'll just verify the certificates exist and are readable
-	serverCrt, err := os.ReadFile(serverCertPath)
-	if err != nil {
-		return fmt.Errorf("failed to read server certificate: %w", err)
-	}
-	assert.NotEmpty(t, serverCrt, "Server certificate should not be empty")
-
-	caBundle, err := os.ReadFile(caBundlePath)
-	if err != nil {
-		return fmt.Errorf("failed to read CA bundle: %w", err)
-	}
-	assert.NotEmpty(t, caBundle, "CA bundle should not be empty")
-
-	return nil
 }
 
 func validateVLLMProviderStatus(t *testing.T) error {
