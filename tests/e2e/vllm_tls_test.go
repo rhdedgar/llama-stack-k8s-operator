@@ -22,7 +22,10 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/discovery"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	"sigs.k8s.io/yaml"
 )
 
@@ -33,6 +36,18 @@ const (
 	vllmModelsPath      = "/v1/models"
 	vllmCompletionsPath = "/v1/completions"
 	llsTestNS           = "llama-stack-test"
+)
+
+var (
+	projectRoot, _                 = filepath.Abs("../..")
+	vllmOpenShiftConfigPath        = filepath.Join(projectRoot, "config", "samples", "vllm", "openshift", "01_vllm.yaml")
+	vllmOpenShiftPrerequisitesPath = filepath.Join(projectRoot, "config", "samples", "vllm", "openshift", "00_prerequisites.yaml")
+	vllmKubernetesConfigPath       = filepath.Join(projectRoot, "config", "samples", "vllm", "vllm-local-model.yaml")
+	certificateScriptPath          = filepath.Join(projectRoot, "config", "samples", "generate_certificates.sh")
+	serverCertPath                 = filepath.Join(projectRoot, "config", "samples", "vllm-certs", "server.crt")
+	serverKeyPath                  = filepath.Join(projectRoot, "config", "samples", "vllm-certs", "server.key")
+	caBundlePath                   = filepath.Join(projectRoot, "config", "samples", "vllm-ca-certs", "ca-bundle.crt")
+	llamaStackTLSTestConfigPath    = filepath.Join(projectRoot, "config", "samples", "vllm", "example-with-vllm-tls.yaml")
 )
 
 func TestVLLMTLSSuite(t *testing.T) {
@@ -258,19 +273,8 @@ func testVLLMTLSCleanup(t *testing.T) {
 func generateCertificates(t *testing.T) {
 	t.Helper()
 
-	// Get the project root path
-	projectRoot, err := filepath.Abs("../..")
-	require.NoError(t, err, "Failed to get project root")
-
-	// Check if certificates already exist
-	certsDir := filepath.Join(projectRoot, "config", "samples", "vllm-certs")
-	caCertsDir := filepath.Join(projectRoot, "config", "samples", "vllm-ca-certs")
-
-	serverCrtPath := filepath.Join(certsDir, "server.crt")
-	caBundlePath := filepath.Join(caCertsDir, "ca-bundle.crt")
-
 	// Check if both certificate files exist
-	if _, err = os.Stat(serverCrtPath); err == nil {
+	if _, err := os.Stat(serverCertPath); err == nil {
 		if _, err = os.Stat(caBundlePath); err == nil {
 			t.Log("Certificates already exist, skipping generation")
 			return
@@ -278,8 +282,7 @@ func generateCertificates(t *testing.T) {
 	}
 
 	// Run the certificate generation script
-	scriptPath := filepath.Join(projectRoot, "config", "samples", "generate_certificates.sh")
-	t.Logf("Running certificate generation script: %s", scriptPath)
+	t.Logf("Running certificate generation script: %s", certificateScriptPath)
 
 	// Change to the project root directory to run the script
 	originalDir, err := os.Getwd()
@@ -293,7 +296,7 @@ func generateCertificates(t *testing.T) {
 	require.NoError(t, err, "Failed to change to project root")
 
 	// Execute the script
-	cmd := exec.Command("bash", scriptPath)
+	cmd := exec.Command("bash", certificateScriptPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Logf("Certificate generation script output: %s", string(output))
@@ -319,18 +322,12 @@ func copyTLSSecretsToNamespace(t *testing.T, targetNS string) error {
 		},
 	}
 
-	// Get the project root path
-	projectRoot, err := filepath.Abs("../..")
-	if err != nil {
-		return fmt.Errorf("failed to get project root: %w", err)
-	}
-
 	// Read certificate files
-	serverCrt, err := os.ReadFile(filepath.Join(projectRoot, "config", "samples", "vllm-certs", "server.crt"))
+	serverCrt, err := os.ReadFile(serverCertPath)
 	if err != nil {
 		return fmt.Errorf("failed to read server certificate: %w", err)
 	}
-	serverKey, err := os.ReadFile(filepath.Join(projectRoot, "config", "samples", "vllm-certs", "server.key"))
+	serverKey, err := os.ReadFile(serverKeyPath)
 	if err != nil {
 		return fmt.Errorf("failed to read server key: %w", err)
 	}
@@ -349,14 +346,8 @@ func copyTLSSecretsToNamespace(t *testing.T, targetNS string) error {
 func createCABundleConfigMap(t *testing.T, targetNS string) error {
 	t.Helper()
 
-	// Get the project root path
-	projectRoot, err := filepath.Abs("../..")
-	if err != nil {
-		return fmt.Errorf("failed to get project root: %w", err)
-	}
-
 	// Read CA bundle
-	caBundle, err := os.ReadFile(filepath.Join(projectRoot, "config", "samples", "vllm-ca-certs", "ca-bundle.crt"))
+	caBundle, err := os.ReadFile(caBundlePath)
 	if err != nil {
 		return fmt.Errorf("failed to read CA bundle: %w", err)
 	}
@@ -417,7 +408,7 @@ func verifyCABundleConfigMap(t *testing.T, targetNS string) error {
 	// Verify the CA bundle content exists
 	caBundle, exists := configMap.Data["ca-bundle.crt"]
 	if !exists {
-		return errors.New("CA bundle ConfigMap does not contain ca-bundle.crt key")
+		return errors.New("CA bundle ConfigMap does not contain key named ca-bundle.crt")
 	}
 
 	if len(caBundle) == 0 {
@@ -425,13 +416,6 @@ func verifyCABundleConfigMap(t *testing.T, targetNS string) error {
 	}
 
 	t.Logf("CA bundle ConfigMap verified: found %d bytes of CA bundle data", len(caBundle))
-
-	// Log first few lines of CA bundle for debugging
-	lines := strings.Split(caBundle, "\n")
-	if len(lines) > 3 {
-		t.Logf("CA bundle starts with: %s", lines[0])
-		t.Logf("CA bundle second line: %s", lines[1])
-	}
 
 	// Check if CA bundle appears to be a placeholder
 	if len(caBundle) < 100 || !strings.Contains(caBundle, "BEGIN CERTIFICATE") {
@@ -480,14 +464,8 @@ func verifyLlamaStackTLSConfig(t *testing.T, namespace, name string) error {
 func createVLLMTLSSecrets(t *testing.T) error {
 	t.Helper()
 
-	// Get the project root path
-	projectRoot, err := filepath.Abs("../..")
-	if err != nil {
-		return fmt.Errorf("failed to get project root: %w", err)
-	}
-
 	// Create vllm-ca-certs secret in default namespace (for external access)
-	caBundleData, err := os.ReadFile(filepath.Join(projectRoot, "config", "samples", "vllm-ca-certs", "ca-bundle.crt"))
+	caBundleData, err := os.ReadFile(caBundlePath)
 	if err != nil {
 		return fmt.Errorf("failed to read CA bundle: %w", err)
 	}
@@ -509,12 +487,12 @@ func createVLLMTLSSecrets(t *testing.T) error {
 	}
 
 	// Create vllm-certs secret in vllm-dist namespace (for the vLLM server)
-	serverCrtData, err := os.ReadFile(filepath.Join(projectRoot, "config", "samples", "vllm-certs", "server.crt"))
+	serverCrtData, err := os.ReadFile(serverCertPath)
 	if err != nil {
 		return fmt.Errorf("failed to read server certificate: %w", err)
 	}
 
-	serverKeyData, err := os.ReadFile(filepath.Join(projectRoot, "config", "samples", "vllm-certs", "server.key"))
+	serverKeyData, err := os.ReadFile(serverKeyPath)
 	if err != nil {
 		return fmt.Errorf("failed to read server key: %w", err)
 	}
@@ -545,14 +523,8 @@ func createVLLMTLSSecrets(t *testing.T) error {
 func updateCABundleConfigMap(t *testing.T, targetNS string) error {
 	t.Helper()
 
-	// Get the project root path
-	projectRoot, err := filepath.Abs("../..")
-	if err != nil {
-		return fmt.Errorf("failed to get project root: %w", err)
-	}
-
 	// Read the actual CA bundle from the file
-	actualCABundle, err := os.ReadFile(filepath.Join(projectRoot, "config", "samples", "vllm-ca-certs", "ca-bundle.crt"))
+	actualCABundle, err := os.ReadFile(caBundlePath)
 	if err != nil {
 		return fmt.Errorf("failed to read CA bundle file: %w", err)
 	}
@@ -608,48 +580,168 @@ func restartDeployment(t *testing.T, namespace, name string) error {
 	return nil
 }
 
-func deployVLLMServer(t *testing.T) error {
+// isOpenShiftCluster detects if the current cluster is running OpenShift by checking
+// for the SecurityContextConstraints resource in the security.openshift.io API group.
+// This is equivalent to: kubectl api-resources --api-group=security.openshift.io | grep -iq 'SecurityContextConstraints'.
+func isOpenShiftCluster(cfg *rest.Config) (bool, error) {
+	// Create a discovery client
+	discoveryClient, err := discovery.NewDiscoveryClientForConfig(cfg)
+	if err != nil {
+		return false, fmt.Errorf("failed to create discovery client: %w", err)
+	}
+
+	// Check if the security.openshift.io API group exists
+	apiGroupList, err := discoveryClient.ServerGroups()
+	if err != nil {
+		return false, fmt.Errorf("failed to get server groups: %w", err)
+	}
+
+	// Look for the security.openshift.io API group
+	for _, group := range apiGroupList.Groups {
+		if group.Name == "security.openshift.io" {
+			// Found the OpenShift security API group, now check for SecurityContextConstraints
+			resourceList, err := discoveryClient.ServerResourcesForGroupVersion("security.openshift.io/v1")
+			if err != nil {
+				// If we can't get resources for this group version, continue checking
+				continue
+			}
+
+			// Check if SecurityContextConstraints resource exists
+			for _, resource := range resourceList.APIResources {
+				if resource.Kind == "SecurityContextConstraints" {
+					return true, nil
+				}
+			}
+		}
+	}
+
+	return false, nil
+}
+
+// getRestConfig returns the REST config for cluster communication.
+func getRestConfig() (*rest.Config, error) {
+	cfg, err := rest.InClusterConfig()
+	if err != nil {
+		// If not in cluster, get config from kubeconfig (using the same method as test setup)
+		cfg, err = config.GetConfig()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get REST config: %w", err)
+		}
+	}
+	return cfg, nil
+}
+
+// determineVLLMConfigPath determines which YAML file to use based on cluster type.
+func determineVLLMConfigPath(t *testing.T) (string, error) {
 	t.Helper()
 
-	// Read vLLM deployment configuration
-	projectRoot, err := filepath.Abs("../..")
+	// Get the REST config to detect OpenShift
+	cfg, err := getRestConfig()
 	if err != nil {
-		return fmt.Errorf("failed to get project root: %w", err)
+		return "", err
 	}
 
-	vllmConfigPath := filepath.Join(projectRoot, "config", "samples", "vllm-k8s.yaml")
-	vllmConfigData, err := os.ReadFile(vllmConfigPath)
+	// Detect if this is an OpenShift cluster
+	isOpenShift, err := isOpenShiftCluster(cfg)
 	if err != nil {
-		return fmt.Errorf("failed to read vLLM config: %w", err)
+		t.Logf("Warning: failed to detect OpenShift, falling back to Kubernetes: %v", err)
+		isOpenShift = false
 	}
 
-	// Apply vLLM configuration
-	objects, err := parseKubernetesYAML(vllmConfigData)
-	if err != nil {
-		return fmt.Errorf("failed to parse vLLM config: %w", err)
+	// Choose the appropriate YAML file based on the cluster type
+	if isOpenShift {
+		t.Logf("OpenShift cluster detected, using vllm.yaml")
+		return vllmOpenShiftConfigPath, nil
 	}
 
+	t.Logf("Kubernetes cluster detected, using vllm-k8s.yaml")
+	return vllmKubernetesConfigPath, nil
+}
+
+// applyYAMLFile reads a YAML file and applies all resources to the cluster.
+func applyYAMLFile(t *testing.T, yamlPath string) error {
+	t.Helper()
+
+	// Read YAML file
+	yamlData, err := os.ReadFile(yamlPath)
+	if err != nil {
+		return fmt.Errorf("failed to read YAML file %s: %w", yamlPath, err)
+	}
+
+	// Parse YAML into Kubernetes objects
+	objects, err := parseKubernetesYAML(yamlData)
+	if err != nil {
+		return fmt.Errorf("failed to parse YAML file %s: %w", yamlPath, err)
+	}
+
+	// Apply each object to the cluster
 	for _, obj := range objects {
+		// Set namespace for namespace-scoped resources that don't have one
+		if obj.GetNamespace() == "" && isNamespaceScoped(obj) {
+			obj.SetNamespace(vllmNS)
+		}
+
 		err = TestEnv.Client.Create(TestEnv.Ctx, obj)
 		if err != nil && !k8serrors.IsAlreadyExists(err) {
-			return fmt.Errorf("failed to create vLLM resource: %w", err)
+			return fmt.Errorf("failed to create resource from %s: %w", yamlPath, err)
 		}
 	}
 
 	return nil
 }
 
+func deployVLLMServer(t *testing.T) error {
+	t.Helper()
+
+	// Determine which YAML file to use
+	vllmConfigPath, err := determineVLLMConfigPath(t)
+	if err != nil {
+		return fmt.Errorf("failed to determine vLLM config path: %w", err)
+	}
+
+	// If this is OpenShift, also apply the prerequisites first
+	if vllmConfigPath == vllmOpenShiftConfigPath {
+		t.Logf("Applying OpenShift prerequisites from %s", vllmOpenShiftPrerequisitesPath)
+		err = applyYAMLFile(t, vllmOpenShiftPrerequisitesPath)
+		if err != nil {
+			return fmt.Errorf("failed to apply OpenShift prerequisites: %w", err)
+		}
+	}
+
+	// Apply the main vLLM configuration
+	t.Logf("Applying vLLM configuration from %s", vllmConfigPath)
+	err = applyYAMLFile(t, vllmConfigPath)
+	if err != nil {
+		return fmt.Errorf("failed to apply vLLM config: %w", err)
+	}
+
+	return nil
+}
+
+// isNamespaceScoped returns true if the given resource is namespace-scoped.
+func isNamespaceScoped(obj client.Object) bool {
+	kind := obj.GetObjectKind().GroupVersionKind().Kind
+
+	// List of cluster-scoped resources that don't need a namespace
+	clusterScopedResources := map[string]bool{
+		"SecurityContextConstraints": true,
+		"ClusterRole":                true,
+		"ClusterRoleBinding":         true,
+		"CustomResourceDefinition":   true,
+		"PersistentVolume":           true,
+		"StorageClass":               true,
+		"Namespace":                  true,
+		"Node":                       true,
+	}
+
+	return !clusterScopedResources[kind]
+}
+
 func deployLlamaStackWithCABundle(t *testing.T) error {
 	t.Helper()
 
 	// Read LlamaStack TLS test configuration
-	projectRoot, err := filepath.Abs("../..")
-	if err != nil {
-		return fmt.Errorf("failed to get project root: %w", err)
-	}
-
-	llamaStackConfigPath := filepath.Join(projectRoot, "config", "samples", "vllm-tls-test.yaml")
-	llamaStackConfigData, err := os.ReadFile(llamaStackConfigPath)
+	llamaStackConfigData, err := os.ReadFile(llamaStackTLSTestConfigPath)
 	if err != nil {
 		return fmt.Errorf("failed to read LlamaStack config: %w", err)
 	}
@@ -708,20 +800,14 @@ func testDirectTLSConnection(t *testing.T) error {
 	// 3. Make an HTTPS request to verify TLS works
 	// 4. Verify the certificate chain
 
-	// Get the project root path
-	projectRoot, err := filepath.Abs("../..")
-	if err != nil {
-		return fmt.Errorf("failed to get project root: %w", err)
-	}
-
 	// For now, we'll just verify the certificates exist and are readable
-	serverCrt, err := os.ReadFile(filepath.Join(projectRoot, "config", "samples", "vllm-certs", "server.crt"))
+	serverCrt, err := os.ReadFile(serverCertPath)
 	if err != nil {
 		return fmt.Errorf("failed to read server certificate: %w", err)
 	}
 	assert.NotEmpty(t, serverCrt, "Server certificate should not be empty")
 
-	caBundle, err := os.ReadFile(filepath.Join(projectRoot, "config", "samples", "vllm-ca-certs", "ca-bundle.crt"))
+	caBundle, err := os.ReadFile(caBundlePath)
 	if err != nil {
 		return fmt.Errorf("failed to read CA bundle: %w", err)
 	}

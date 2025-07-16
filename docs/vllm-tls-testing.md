@@ -27,7 +27,7 @@ The certificates are organized into:
 
 ### 2. vLLM Deployment Configuration
 
-**File**: `config/samples/vllm-k8s.yaml`
+**File**: `config/samples/vllm/vllm-local-model.yaml`
 
 This configuration deploys a Kubernetes-compatible vLLM server with:
 - TLS enabled using generated certificates
@@ -43,7 +43,7 @@ Key features:
 
 ### 3. LlamaStackDistribution Configuration
 
-**File**: `config/samples/vllm-tls-test.yaml`
+**File**: `config/samples/vllm/example-with-vllm-tls.yaml`
 
 This configuration creates a LlamaStackDistribution that:
 - Connects to vLLM server using HTTPS
@@ -70,7 +70,7 @@ The e2e tests are integrated into the GitHub Actions workflow (`.github/workflow
 
 3. **vLLM Deployment**:
    ```bash
-   kubectl apply -f config/samples/vllm-k8s.yaml
+   kubectl apply -f config/samples/vllm/vllm-local-model.yaml
    kubectl wait --for=condition=available --timeout=600s deployment/vllm-server -n vllm-dist
    ```
 
@@ -170,7 +170,7 @@ kubectl exec -n vllm-dist deployment/vllm-server -- ls -la /etc/ssl/certs/
 ## Related Files
 
 - `config/samples/generate_certificates.sh`: Certificate generation script
-- `config/samples/vllm-k8s.yaml`: Kubernetes vLLM deployment
-- `config/samples/vllm-tls-test.yaml`: LlamaStackDistribution TLS configuration
+- `config/samples/vllm/vllm-local-model.yaml`: Kubernetes vLLM deployment
+- `config/samples/vllm/example-with-vllm-tls.yaml`: LlamaStackDistribution TLS configuration
 - `tests/e2e/vllm_tls_test.go`: E2E test suite
 - `.github/workflows/run-e2e-test.yml`: GitHub Actions workflow

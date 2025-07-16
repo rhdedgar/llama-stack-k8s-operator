@@ -6,7 +6,7 @@ metadata:
   namespace: llama-stack-test
 data:
   ca-bundle.crt: |
-    # This will be populated by the test with the actual CA bundle
+    # This will be populated by the e2e test with the actual CA bundle
 ---
 apiVersion: v1
 kind: ConfigMap
