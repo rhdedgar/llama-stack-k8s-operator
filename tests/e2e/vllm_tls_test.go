@@ -40,7 +40,7 @@ const (
 var (
 	projectRoot, _                 = filepath.Abs("../..")
 	vllmOpenShiftPrerequisitesPath = filepath.Join(projectRoot, "config", "samples", "vllm", "openshift", "00_prerequisites.yaml")
-	vllmKubernetesConfigPath       = filepath.Join(projectRoot, "config", "samples", "vllm", "vllm-local-model.yaml")
+	vllmKubernetesConfigPath       = filepath.Join(projectRoot, "config", "samples", "vllm", "vllm-mock.yaml")
 	certificateScriptPath          = filepath.Join(projectRoot, "config", "samples", "generate_certificates.sh")
 	serverCertPath                 = filepath.Join(projectRoot, "config", "samples", "vllm-certs", "server.crt")
 	serverKeyPath                  = filepath.Join(projectRoot, "config", "samples", "vllm-certs", "server.key")
