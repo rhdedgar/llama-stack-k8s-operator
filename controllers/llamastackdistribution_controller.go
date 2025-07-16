@@ -288,11 +288,11 @@ func (r *LlamaStackDistributionReconciler) createConfigMapFieldIndexer(ctx conte
 		r.configMapIndexFunc,
 	); err != nil {
 		// Log warning but don't fail startup - older Kubernetes versions may not support this
-		mgr.GetLogger().Info("Field indexer for ConfigMap references not supported, will use manual search fallback",
+		mgr.GetLogger().V(1).Info("Field indexer for ConfigMap references not supported, will use manual search fallback",
 			"error", err.Error())
 		return nil
 	}
-	mgr.GetLogger().Info("Successfully created field indexer for ConfigMap references - will use efficient lookups")
+	mgr.GetLogger().V(1).Info("Successfully created field indexer for ConfigMap references - will use efficient lookups")
 	return nil
 }
 
@@ -445,7 +445,7 @@ func (r *LlamaStackDistributionReconciler) isConfigMapReferenced(configMap clien
 	if err != nil {
 		// Field indexer failed (likely due to older Kubernetes version not supporting custom field labels)
 		// Fall back to a manual check instead of assuming all ConfigMaps are referenced
-		logger.Info("Field indexer not supported, falling back to manual ConfigMap reference check", "error", err.Error())
+		logger.V(1).Info("Field indexer not supported, falling back to manual ConfigMap reference check", "error", err.Error())
 		return r.manuallyCheckConfigMapReference(configMap)
 	}
 
@@ -519,7 +519,7 @@ func (r *LlamaStackDistributionReconciler) tryFieldIndexerLookup(ctx context.Con
 	attachedLlamaStacks := llamav1alpha1.LlamaStackDistributionList{}
 	err := r.List(ctx, &attachedLlamaStacks, client.MatchingFields{"spec.server.userConfig.configMapName": indexKey})
 	if err != nil {
-		logger.Info("Field indexer not supported, will fall back to a manual search for ConfigMap event processing",
+		logger.V(1).Info("Field indexer not supported, will fall back to a manual search for ConfigMap event processing",
 			"indexKey", indexKey, "error", err.Error())
 		return attachedLlamaStacks, false
 	}

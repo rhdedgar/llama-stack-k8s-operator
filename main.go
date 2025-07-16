@@ -89,7 +89,7 @@ func main() {
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
 	opts := zap.Options{
-		Development:     true,
+		Development:     false,
 		StacktraceLevel: zapcore.PanicLevel, // Set higher than ErrorLevel to avoid stack traces in logs
 	}
 	opts.BindFlags(flag.CommandLine)
