@@ -40,7 +40,6 @@ const (
 
 var (
 	projectRoot, _                 = filepath.Abs("../..")
-	vllmOpenShiftConfigPath        = filepath.Join(projectRoot, "config", "samples", "vllm", "openshift", "01_vllm.yaml")
 	vllmOpenShiftPrerequisitesPath = filepath.Join(projectRoot, "config", "samples", "vllm", "openshift", "00_prerequisites.yaml")
 	vllmKubernetesConfigPath       = filepath.Join(projectRoot, "config", "samples", "vllm", "vllm-local-model.yaml")
 	certificateScriptPath          = filepath.Join(projectRoot, "config", "samples", "generate_certificates.sh")
@@ -631,33 +630,6 @@ func getRestConfig() (*rest.Config, error) {
 	return cfg, nil
 }
 
-// determineVLLMConfigPath determines which YAML file to use based on cluster type.
-func determineVLLMConfigPath(t *testing.T) (string, error) {
-	t.Helper()
-
-	// Get the REST config to detect OpenShift
-	cfg, err := getRestConfig()
-	if err != nil {
-		return "", err
-	}
-
-	// Detect if this is an OpenShift cluster
-	isOpenShift, err := isOpenShiftCluster(cfg)
-	if err != nil {
-		t.Logf("Warning: failed to detect OpenShift, falling back to Kubernetes: %v", err)
-		isOpenShift = false
-	}
-
-	// Choose the appropriate YAML file based on the cluster type
-	if isOpenShift {
-		t.Logf("OpenShift cluster detected, using vllm.yaml")
-		return vllmOpenShiftConfigPath, nil
-	}
-
-	t.Logf("Kubernetes cluster detected, using vllm-k8s.yaml")
-	return vllmKubernetesConfigPath, nil
-}
-
 // applyYAMLFile reads a YAML file and applies all resources to the cluster.
 func applyYAMLFile(t *testing.T, yamlPath string) error {
 	t.Helper()
@@ -693,24 +665,33 @@ func applyYAMLFile(t *testing.T, yamlPath string) error {
 func deployVLLMServer(t *testing.T) error {
 	t.Helper()
 
-	// Determine which YAML file to use
-	vllmConfigPath, err := determineVLLMConfigPath(t)
+	// Get the REST config to detect OpenShift
+	cfg, err := getRestConfig()
 	if err != nil {
-		return fmt.Errorf("failed to determine vLLM config path: %w", err)
+		return fmt.Errorf("failed to get REST config: %w", err)
 	}
 
-	// If this is OpenShift, also apply the prerequisites first
-	if vllmConfigPath == vllmOpenShiftConfigPath {
-		t.Logf("Applying OpenShift prerequisites from %s", vllmOpenShiftPrerequisitesPath)
+	// Detect if this is an OpenShift cluster
+	isOpenShift, err := isOpenShiftCluster(cfg)
+	if err != nil {
+		t.Logf("Warning: failed to detect OpenShift, falling back to Kubernetes: %v", err)
+		isOpenShift = false
+	}
+
+	// If this is OpenShift, apply the prerequisites first
+	if isOpenShift {
+		t.Logf("OpenShift cluster detected, applying prerequisites from %s", vllmOpenShiftPrerequisitesPath)
 		err = applyYAMLFile(t, vllmOpenShiftPrerequisitesPath)
 		if err != nil {
 			return fmt.Errorf("failed to apply OpenShift prerequisites: %w", err)
 		}
+	} else {
+		t.Logf("Kubernetes cluster detected")
 	}
 
-	// Apply the main vLLM configuration
-	t.Logf("Applying vLLM configuration from %s", vllmConfigPath)
-	err = applyYAMLFile(t, vllmConfigPath)
+	// Always use the Kubernetes vLLM configuration file
+	t.Logf("Applying vLLM configuration from %s", vllmKubernetesConfigPath)
+	err = applyYAMLFile(t, vllmKubernetesConfigPath)
 	if err != nil {
 		return fmt.Errorf("failed to apply vLLM config: %w", err)
 	}

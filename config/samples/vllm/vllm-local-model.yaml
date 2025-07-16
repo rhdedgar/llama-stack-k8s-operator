@@ -4,6 +4,12 @@ kind: Namespace
 metadata:
   name: vllm-dist
 ---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vllm-sa
+  namespace: vllm-dist
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -19,6 +25,7 @@ spec:
       labels:
         app.kubernetes.io/name: vllm
     spec:
+      serviceAccountName: vllm-sa
       containers:
       - name: vllm
         image: quay.io/dedgar/vllm:v0.0.1
@@ -47,13 +54,6 @@ spec:
           - name: vllm-certs
             mountPath: /etc/ssl/certs
             readOnly: true
-        resources:
-          requests:
-            cpu: 100m
-            memory: 512Mi
-          limits:
-            cpu: 2000m
-            memory: 4Gi
       volumes:
       - name: vllm-certs
         secret:
