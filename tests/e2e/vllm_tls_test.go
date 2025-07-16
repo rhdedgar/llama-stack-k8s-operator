@@ -30,7 +30,7 @@ import (
 
 const (
 	vllmNS              = "vllm-dist"
-	vllmTestTimeout     = 10 * time.Minute
+	vllmTestTimeout     = 15 * time.Minute // Increased timeout for resource-constrained environments
 	vllmHealthCheckPath = "/health"
 	vllmModelsPath      = "/v1/models"
 	vllmCompletionsPath = "/v1/completions"
@@ -250,318 +250,6 @@ func testVLLMTLSCleanup(t *testing.T) {
 	require.NoError(t, err, "LlamaStack deployment should be deleted")
 }
 
-// Helper functions
-
-func generateCertificates(t *testing.T) {
-	t.Helper()
-
-	// Check if both certificate files exist
-	if _, err := os.Stat(serverCertPath); err == nil {
-		if _, err = os.Stat(caBundlePath); err == nil {
-			t.Log("Certificates already exist, skipping generation")
-			return
-		}
-	}
-
-	// Run the certificate generation script
-	t.Logf("Running certificate generation script: %s", certificateScriptPath)
-
-	// Change to the project root directory to run the script
-	originalDir, err := os.Getwd()
-	require.NoError(t, err, "Failed to get current directory")
-	defer func() {
-		err = os.Chdir(originalDir)
-		require.NoError(t, err, "Failed to restore original directory")
-	}()
-
-	err = os.Chdir(projectRoot)
-	require.NoError(t, err, "Failed to change to project root")
-
-	// Execute the script
-	cmd := exec.Command("bash", certificateScriptPath)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Logf("Certificate generation script output: %s", string(output))
-		require.NoError(t, err, "Failed to run certificate generation script")
-	}
-
-	t.Log("Certificates generated successfully")
-}
-
-func copyTLSSecretsToNamespace(t *testing.T, targetNS string) error {
-	t.Helper()
-
-	// Copy vllm-certs secret
-	vllmCerts := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "vllm-certs",
-			Namespace: targetNS,
-		},
-		Type: corev1.SecretTypeOpaque,
-		Data: map[string][]byte{
-			"server.crt": {}, // Will be populated by certificate generation
-			"server.key": {}, // Will be populated by certificate generation
-		},
-	}
-
-	// Read certificate files
-	serverCrt, err := os.ReadFile(serverCertPath)
-	if err != nil {
-		return fmt.Errorf("failed to read server certificate: %w", err)
-	}
-	serverKey, err := os.ReadFile(serverKeyPath)
-	if err != nil {
-		return fmt.Errorf("failed to read server key: %w", err)
-	}
-
-	vllmCerts.Data["server.crt"] = serverCrt
-	vllmCerts.Data["server.key"] = serverKey
-
-	err = TestEnv.Client.Create(TestEnv.Ctx, vllmCerts)
-	if err != nil && !k8serrors.IsAlreadyExists(err) {
-		return fmt.Errorf("failed to create vllm-certs secret: %w", err)
-	}
-
-	return nil
-}
-
-func createCABundleConfigMap(t *testing.T, targetNS string) error {
-	t.Helper()
-
-	// Read CA bundle
-	caBundle, err := os.ReadFile(caBundlePath)
-	if err != nil {
-		return fmt.Errorf("failed to read CA bundle: %w", err)
-	}
-
-	caBundleConfigMap := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "vllm-ca-bundle",
-			Namespace: targetNS,
-		},
-		Data: map[string]string{
-			"ca-bundle.crt": string(caBundle),
-		},
-	}
-
-	// Try to create, if it exists, update it
-	err = TestEnv.Client.Create(TestEnv.Ctx, caBundleConfigMap)
-	if err != nil {
-		if k8serrors.IsAlreadyExists(err) {
-			// ConfigMap exists, update it
-			existingConfigMap := &corev1.ConfigMap{}
-			err = TestEnv.Client.Get(TestEnv.Ctx, client.ObjectKey{
-				Namespace: targetNS,
-				Name:      "vllm-ca-bundle",
-			}, existingConfigMap)
-			if err != nil {
-				return fmt.Errorf("failed to get existing ConfigMap: %w", err)
-			}
-
-			existingConfigMap.Data["ca-bundle.crt"] = string(caBundle)
-			err = TestEnv.Client.Update(TestEnv.Ctx, existingConfigMap)
-			if err != nil {
-				return fmt.Errorf("failed to update existing ConfigMap: %w", err)
-			}
-			t.Logf("Updated existing CA bundle ConfigMap with %d bytes", len(caBundle))
-		} else {
-			return fmt.Errorf("failed to create CA bundle configmap: %w", err)
-		}
-	} else {
-		t.Logf("Created CA bundle ConfigMap with %d bytes", len(caBundle))
-	}
-
-	return nil
-}
-
-func verifyCABundleConfigMap(t *testing.T, targetNS string) error {
-	t.Helper()
-
-	// Get the ConfigMap
-	configMap := &corev1.ConfigMap{}
-	err := TestEnv.Client.Get(TestEnv.Ctx, client.ObjectKey{
-		Namespace: targetNS,
-		Name:      "vllm-ca-bundle",
-	}, configMap)
-	if err != nil {
-		return fmt.Errorf("failed to get CA bundle ConfigMap: %w", err)
-	}
-
-	// Verify the CA bundle content exists
-	caBundle, exists := configMap.Data["ca-bundle.crt"]
-	if !exists {
-		return errors.New("CA bundle ConfigMap does not contain key named ca-bundle.crt")
-	}
-
-	if len(caBundle) == 0 {
-		return errors.New("CA bundle ConfigMap ca-bundle.crt is empty")
-	}
-
-	t.Logf("CA bundle ConfigMap verified: found %d bytes of CA bundle data", len(caBundle))
-
-	// Check if CA bundle appears to be a placeholder
-	if len(caBundle) < 100 || !strings.Contains(caBundle, "BEGIN CERTIFICATE") {
-		t.Logf("WARNING: CA bundle appears to be a placeholder or invalid")
-		t.Logf("CA bundle content: %s", caBundle)
-
-		// Try to update the ConfigMap with the actual CA bundle from the file
-		err := updateCABundleConfigMap(t, targetNS)
-		if err != nil {
-			t.Logf("Failed to update CA bundle ConfigMap: %v", err)
-		}
-	}
-
-	return nil
-}
-
-func verifyLlamaStackTLSConfig(t *testing.T, namespace, name string) error {
-	t.Helper()
-
-	// Get the LlamaStack distribution
-	distribution := &v1alpha1.LlamaStackDistribution{}
-	err := TestEnv.Client.Get(TestEnv.Ctx, client.ObjectKey{
-		Namespace: namespace,
-		Name:      name,
-	}, distribution)
-	if err != nil {
-		return fmt.Errorf("failed to get LlamaStack distribution: %w", err)
-	}
-
-	// Verify TLS configuration is present
-	if distribution.Spec.Server.TLSConfig == nil {
-		return errors.New("LlamaStack distribution does not have TLS config")
-	}
-
-	if distribution.Spec.Server.TLSConfig.CABundle == nil {
-		return errors.New("LlamaStack distribution TLS config does not have CA bundle")
-	}
-
-	t.Logf("LlamaStack distribution TLS config verified:")
-	t.Logf("  CA Bundle ConfigMap: %s", distribution.Spec.Server.TLSConfig.CABundle.ConfigMapName)
-	t.Logf("  CA Bundle Key: %s", distribution.Spec.Server.TLSConfig.CABundle.Key)
-
-	return nil
-}
-
-func createVLLMTLSSecrets(t *testing.T) error {
-	t.Helper()
-
-	// Create vllm-ca-certs secret in default namespace (for external access)
-	caBundleData, err := os.ReadFile(caBundlePath)
-	if err != nil {
-		return fmt.Errorf("failed to read CA bundle: %w", err)
-	}
-
-	caCertsSecret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "vllm-ca-certs",
-			Namespace: "default",
-		},
-		Type: corev1.SecretTypeOpaque,
-		Data: map[string][]byte{
-			"ca-bundle.crt": caBundleData,
-		},
-	}
-
-	err = TestEnv.Client.Create(TestEnv.Ctx, caCertsSecret)
-	if err != nil && !k8serrors.IsAlreadyExists(err) {
-		return fmt.Errorf("failed to create vllm-ca-certs secret: %w", err)
-	}
-
-	// Create vllm-certs secret in vllm-dist namespace (for the vLLM server)
-	serverCrtData, err := os.ReadFile(serverCertPath)
-	if err != nil {
-		return fmt.Errorf("failed to read server certificate: %w", err)
-	}
-
-	serverKeyData, err := os.ReadFile(serverKeyPath)
-	if err != nil {
-		return fmt.Errorf("failed to read server key: %w", err)
-	}
-
-	vllmCertsSecret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "vllm-certs",
-			Namespace: "vllm-dist",
-		},
-		Type: corev1.SecretTypeOpaque,
-		Data: map[string][]byte{
-			"server.crt": serverCrtData,
-			"server.key": serverKeyData,
-		},
-	}
-
-	err = TestEnv.Client.Create(TestEnv.Ctx, vllmCertsSecret)
-	if err != nil && !k8serrors.IsAlreadyExists(err) {
-		return fmt.Errorf("failed to create vllm-certs secret: %w", err)
-	}
-
-	t.Logf("Created vllm-ca-certs secret (%d bytes) and vllm-certs secret (%d bytes)",
-		len(caBundleData), len(serverCrtData)+len(serverKeyData))
-
-	return nil
-}
-
-func updateCABundleConfigMap(t *testing.T, targetNS string) error {
-	t.Helper()
-
-	// Read the actual CA bundle from the file
-	actualCABundle, err := os.ReadFile(caBundlePath)
-	if err != nil {
-		return fmt.Errorf("failed to read CA bundle file: %w", err)
-	}
-
-	// Get the existing ConfigMap
-	configMap := &corev1.ConfigMap{}
-	err = TestEnv.Client.Get(TestEnv.Ctx, client.ObjectKey{
-		Namespace: targetNS,
-		Name:      "vllm-ca-bundle",
-	}, configMap)
-	if err != nil {
-		return fmt.Errorf("failed to get ConfigMap: %w", err)
-	}
-
-	// Update the ConfigMap with the actual CA bundle
-	configMap.Data["ca-bundle.crt"] = string(actualCABundle)
-
-	err = TestEnv.Client.Update(TestEnv.Ctx, configMap)
-	if err != nil {
-		return fmt.Errorf("failed to update ConfigMap: %w", err)
-	}
-
-	t.Logf("Updated CA bundle ConfigMap with %d bytes of actual CA bundle data", len(actualCABundle))
-	return nil
-}
-
-func restartDeployment(t *testing.T, namespace, name string) error {
-	t.Helper()
-
-	// Get the deployment
-	deployment := &appsv1.Deployment{}
-	err := TestEnv.Client.Get(TestEnv.Ctx, client.ObjectKey{
-		Namespace: namespace,
-		Name:      name,
-	}, deployment)
-	if err != nil {
-		return fmt.Errorf("failed to get deployment: %w", err)
-	}
-
-	// Add a restart annotation to trigger pod restart
-	if deployment.Spec.Template.Annotations == nil {
-		deployment.Spec.Template.Annotations = make(map[string]string)
-	}
-	deployment.Spec.Template.Annotations["kubectl.kubernetes.io/restartedAt"] = time.Now().Format(time.RFC3339)
-
-	// Update the deployment
-	err = TestEnv.Client.Update(TestEnv.Ctx, deployment)
-	if err != nil {
-		return fmt.Errorf("failed to update deployment: %w", err)
-	}
-
-	t.Logf("Restarted deployment %s in namespace %s", name, namespace)
-	return nil
-}
-
 // isOpenShiftCluster detects if the current cluster is running OpenShift by checking
 // for the SecurityContextConstraints resource in the security.openshift.io API group.
 // This is equivalent to: kubectl api-resources --api-group=security.openshift.io | grep -iq 'SecurityContextConstraints'.
@@ -648,6 +336,11 @@ func applyYAMLFile(t *testing.T, yamlPath string) error {
 func deployVLLMServer(t *testing.T) error {
 	t.Helper()
 
+	// Check if we're running in GitHub Actions for enhanced logging
+	if isGitHubActions() {
+		t.Logf("GitHub Actions environment detected - enabling enhanced logging")
+	}
+
 	// Get the REST config to detect OpenShift
 	cfg, err := getRestConfig()
 	if err != nil {
@@ -670,6 +363,14 @@ func deployVLLMServer(t *testing.T) error {
 		}
 	} else {
 		t.Logf("Kubernetes cluster detected")
+
+		// In GitHub Actions, log additional environment information
+		if isGitHubActions() {
+			t.Logf("GitHub Actions Kubernetes environment:")
+			t.Logf("  GITHUB_RUNNER_OS: %s", os.Getenv("GITHUB_RUNNER_OS"))
+			t.Logf("  RUNNER_ARCH: %s", os.Getenv("RUNNER_ARCH"))
+			t.Logf("  Using resource-aware configuration for vLLM deployment")
+		}
 	}
 
 	// Always use the Kubernetes vLLM configuration file
@@ -677,6 +378,12 @@ func deployVLLMServer(t *testing.T) error {
 	err = applyYAMLFile(t, vllmKubernetesConfigPath)
 	if err != nil {
 		return fmt.Errorf("failed to apply vLLM config: %w", err)
+	}
+
+	// If in GitHub Actions, add some initial deployment status logging
+	if isGitHubActions() {
+		t.Logf("vLLM deployment initiated in GitHub Actions environment")
+		t.Logf("Expected startup time: 3-5 minutes due to model loading")
 	}
 
 	return nil
@@ -990,4 +697,321 @@ func waitForLlamaStackHealthWithTimeout(t *testing.T, timeout time.Duration) err
 
 		return false, nil
 	})
+}
+
+// isGitHubActions detects if the tests are running in GitHub Actions environment.
+func isGitHubActions() bool {
+	return os.Getenv("GITHUB_ACTIONS") == "true"
+}
+
+// Helper functions
+
+func generateCertificates(t *testing.T) {
+	t.Helper()
+
+	// Check if both certificate files exist
+	if _, err := os.Stat(serverCertPath); err == nil {
+		if _, err = os.Stat(caBundlePath); err == nil {
+			t.Log("Certificates already exist, skipping generation")
+			return
+		}
+	}
+
+	// Run the certificate generation script
+	t.Logf("Running certificate generation script: %s", certificateScriptPath)
+
+	// Change to the project root directory to run the script
+	originalDir, err := os.Getwd()
+	require.NoError(t, err, "Failed to get current directory")
+	defer func() {
+		err = os.Chdir(originalDir)
+		require.NoError(t, err, "Failed to restore original directory")
+	}()
+
+	err = os.Chdir(projectRoot)
+	require.NoError(t, err, "Failed to change to project root")
+
+	// Execute the script
+	cmd := exec.Command("bash", certificateScriptPath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Logf("Certificate generation script output: %s", string(output))
+		require.NoError(t, err, "Failed to run certificate generation script")
+	}
+
+	t.Log("Certificates generated successfully")
+}
+
+func copyTLSSecretsToNamespace(t *testing.T, targetNS string) error {
+	t.Helper()
+
+	// Copy vllm-certs secret
+	vllmCerts := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "vllm-certs",
+			Namespace: targetNS,
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{
+			"server.crt": {}, // Will be populated by certificate generation
+			"server.key": {}, // Will be populated by certificate generation
+		},
+	}
+
+	// Read certificate files
+	serverCrt, err := os.ReadFile(serverCertPath)
+	if err != nil {
+		return fmt.Errorf("failed to read server certificate: %w", err)
+	}
+	serverKey, err := os.ReadFile(serverKeyPath)
+	if err != nil {
+		return fmt.Errorf("failed to read server key: %w", err)
+	}
+
+	vllmCerts.Data["server.crt"] = serverCrt
+	vllmCerts.Data["server.key"] = serverKey
+
+	err = TestEnv.Client.Create(TestEnv.Ctx, vllmCerts)
+	if err != nil && !k8serrors.IsAlreadyExists(err) {
+		return fmt.Errorf("failed to create vllm-certs secret: %w", err)
+	}
+
+	return nil
+}
+
+func createCABundleConfigMap(t *testing.T, targetNS string) error {
+	t.Helper()
+
+	// Read CA bundle
+	caBundle, err := os.ReadFile(caBundlePath)
+	if err != nil {
+		return fmt.Errorf("failed to read CA bundle: %w", err)
+	}
+
+	caBundleConfigMap := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "vllm-ca-bundle",
+			Namespace: targetNS,
+		},
+		Data: map[string]string{
+			"ca-bundle.crt": string(caBundle),
+		},
+	}
+
+	// Try to create, if it exists, update it
+	err = TestEnv.Client.Create(TestEnv.Ctx, caBundleConfigMap)
+	if err != nil {
+		if k8serrors.IsAlreadyExists(err) {
+			// ConfigMap exists, update it
+			existingConfigMap := &corev1.ConfigMap{}
+			err = TestEnv.Client.Get(TestEnv.Ctx, client.ObjectKey{
+				Namespace: targetNS,
+				Name:      "vllm-ca-bundle",
+			}, existingConfigMap)
+			if err != nil {
+				return fmt.Errorf("failed to get existing ConfigMap: %w", err)
+			}
+
+			existingConfigMap.Data["ca-bundle.crt"] = string(caBundle)
+			err = TestEnv.Client.Update(TestEnv.Ctx, existingConfigMap)
+			if err != nil {
+				return fmt.Errorf("failed to update existing ConfigMap: %w", err)
+			}
+			t.Logf("Updated existing CA bundle ConfigMap with %d bytes", len(caBundle))
+		} else {
+			return fmt.Errorf("failed to create CA bundle configmap: %w", err)
+		}
+	} else {
+		t.Logf("Created CA bundle ConfigMap with %d bytes", len(caBundle))
+	}
+
+	return nil
+}
+
+func verifyCABundleConfigMap(t *testing.T, targetNS string) error {
+	t.Helper()
+
+	// Get the ConfigMap
+	configMap := &corev1.ConfigMap{}
+	err := TestEnv.Client.Get(TestEnv.Ctx, client.ObjectKey{
+		Namespace: targetNS,
+		Name:      "vllm-ca-bundle",
+	}, configMap)
+	if err != nil {
+		return fmt.Errorf("failed to get CA bundle ConfigMap: %w", err)
+	}
+
+	// Verify the CA bundle content exists
+	caBundle, exists := configMap.Data["ca-bundle.crt"]
+	if !exists {
+		return errors.New("CA bundle ConfigMap does not contain key named ca-bundle.crt")
+	}
+
+	if len(caBundle) == 0 {
+		return errors.New("CA bundle ConfigMap ca-bundle.crt is empty")
+	}
+
+	t.Logf("CA bundle ConfigMap verified: found %d bytes of CA bundle data", len(caBundle))
+
+	// Check if CA bundle appears to be a placeholder
+	if len(caBundle) < 100 || !strings.Contains(caBundle, "BEGIN CERTIFICATE") {
+		t.Logf("WARNING: CA bundle appears to be a placeholder or invalid")
+		t.Logf("CA bundle content: %s", caBundle)
+
+		// Try to update the ConfigMap with the actual CA bundle from the file
+		err := updateCABundleConfigMap(t, targetNS)
+		if err != nil {
+			t.Logf("Failed to update CA bundle ConfigMap: %v", err)
+		}
+	}
+
+	return nil
+}
+
+func verifyLlamaStackTLSConfig(t *testing.T, namespace, name string) error {
+	t.Helper()
+
+	// Get the LlamaStack distribution
+	distribution := &v1alpha1.LlamaStackDistribution{}
+	err := TestEnv.Client.Get(TestEnv.Ctx, client.ObjectKey{
+		Namespace: namespace,
+		Name:      name,
+	}, distribution)
+	if err != nil {
+		return fmt.Errorf("failed to get LlamaStack distribution: %w", err)
+	}
+
+	// Verify TLS configuration is present
+	if distribution.Spec.Server.TLSConfig == nil {
+		return errors.New("LlamaStack distribution does not have TLS config")
+	}
+
+	if distribution.Spec.Server.TLSConfig.CABundle == nil {
+		return errors.New("LlamaStack distribution TLS config does not have CA bundle")
+	}
+
+	t.Logf("LlamaStack distribution TLS config verified:")
+	t.Logf("  CA Bundle ConfigMap: %s", distribution.Spec.Server.TLSConfig.CABundle.ConfigMapName)
+	t.Logf("  CA Bundle Key: %s", distribution.Spec.Server.TLSConfig.CABundle.Key)
+
+	return nil
+}
+
+func createVLLMTLSSecrets(t *testing.T) error {
+	t.Helper()
+
+	// Create vllm-ca-certs secret in default namespace (for external access)
+	caBundleData, err := os.ReadFile(caBundlePath)
+	if err != nil {
+		return fmt.Errorf("failed to read CA bundle: %w", err)
+	}
+
+	caCertsSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "vllm-ca-certs",
+			Namespace: "default",
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{
+			"ca-bundle.crt": caBundleData,
+		},
+	}
+
+	err = TestEnv.Client.Create(TestEnv.Ctx, caCertsSecret)
+	if err != nil && !k8serrors.IsAlreadyExists(err) {
+		return fmt.Errorf("failed to create vllm-ca-certs secret: %w", err)
+	}
+
+	// Create vllm-certs secret in vllm-dist namespace (for the vLLM server)
+	serverCrtData, err := os.ReadFile(serverCertPath)
+	if err != nil {
+		return fmt.Errorf("failed to read server certificate: %w", err)
+	}
+
+	serverKeyData, err := os.ReadFile(serverKeyPath)
+	if err != nil {
+		return fmt.Errorf("failed to read server key: %w", err)
+	}
+
+	vllmCertsSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "vllm-certs",
+			Namespace: "vllm-dist",
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{
+			"server.crt": serverCrtData,
+			"server.key": serverKeyData,
+		},
+	}
+
+	err = TestEnv.Client.Create(TestEnv.Ctx, vllmCertsSecret)
+	if err != nil && !k8serrors.IsAlreadyExists(err) {
+		return fmt.Errorf("failed to create vllm-certs secret: %w", err)
+	}
+
+	t.Logf("Created vllm-ca-certs secret (%d bytes) and vllm-certs secret (%d bytes)",
+		len(caBundleData), len(serverCrtData)+len(serverKeyData))
+
+	return nil
+}
+
+func updateCABundleConfigMap(t *testing.T, targetNS string) error {
+	t.Helper()
+
+	// Read the actual CA bundle from the file
+	actualCABundle, err := os.ReadFile(caBundlePath)
+	if err != nil {
+		return fmt.Errorf("failed to read CA bundle file: %w", err)
+	}
+
+	// Get the existing ConfigMap
+	configMap := &corev1.ConfigMap{}
+	err = TestEnv.Client.Get(TestEnv.Ctx, client.ObjectKey{
+		Namespace: targetNS,
+		Name:      "vllm-ca-bundle",
+	}, configMap)
+	if err != nil {
+		return fmt.Errorf("failed to get ConfigMap: %w", err)
+	}
+
+	// Update the ConfigMap with the actual CA bundle
+	configMap.Data["ca-bundle.crt"] = string(actualCABundle)
+
+	err = TestEnv.Client.Update(TestEnv.Ctx, configMap)
+	if err != nil {
+		return fmt.Errorf("failed to update ConfigMap: %w", err)
+	}
+
+	t.Logf("Updated CA bundle ConfigMap with %d bytes of actual CA bundle data", len(actualCABundle))
+	return nil
+}
+
+func restartDeployment(t *testing.T, namespace, name string) error {
+	t.Helper()
+
+	// Get the deployment
+	deployment := &appsv1.Deployment{}
+	err := TestEnv.Client.Get(TestEnv.Ctx, client.ObjectKey{
+		Namespace: namespace,
+		Name:      name,
+	}, deployment)
+	if err != nil {
+		return fmt.Errorf("failed to get deployment: %w", err)
+	}
+
+	// Add a restart annotation to trigger pod restart
+	if deployment.Spec.Template.Annotations == nil {
+		deployment.Spec.Template.Annotations = make(map[string]string)
+	}
+	deployment.Spec.Template.Annotations["kubectl.kubernetes.io/restartedAt"] = time.Now().Format(time.RFC3339)
+
+	// Update the deployment
+	err = TestEnv.Client.Update(TestEnv.Ctx, deployment)
+	if err != nil {
+		return fmt.Errorf("failed to update deployment: %w", err)
+	}
+
+	t.Logf("Restarted deployment %s in namespace %s", name, namespace)
+	return nil
 }

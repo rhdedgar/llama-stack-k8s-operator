@@ -28,7 +28,7 @@ import (
 
 const (
 	ollamaNS             = "ollama-dist"
-	pollInterval         = 10 * time.Second
+	pollInterval         = 30 * time.Second // Increased from 10s to reduce rate limiting
 	ResourceReadyTimeout = 5 * time.Minute
 	generalRetryInterval = 5 * time.Second
 )
@@ -113,17 +113,39 @@ func EnsureResourceReady(
 	t.Helper()
 	ctx, cancel := context.WithTimeout(testenv.Ctx, timeout)
 	defer cancel()
+
+	attempt := 0
 	return wait.PollUntilContextTimeout(ctx, pollInterval, timeout, true, func(ctx context.Context) (bool, error) {
+		attempt++
+		t.Logf("Attempt %d: Checking readiness of %s %s/%s", attempt, gvk.Kind, namespace, name)
+
 		obj := &unstructured.Unstructured{}
 		obj.SetGroupVersionKind(gvk)
 		err := testenv.Client.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, obj)
 		if err != nil {
 			if errors.IsNotFound(err) {
+				t.Logf("Resource %s %s/%s not found yet", gvk.Kind, namespace, name)
 				return false, nil
 			}
+			t.Logf("Error getting resource %s %s/%s: %v", gvk.Kind, namespace, name, err)
 			return false, err
 		}
-		return isReady(obj), nil
+
+		ready := isReady(obj)
+		if !ready {
+			// Log current status for debugging
+			if gvk.Kind == "Deployment" {
+				replicas, _, _ := unstructured.NestedInt64(obj.Object, "status", "replicas")
+				availableReplicas, _, _ := unstructured.NestedInt64(obj.Object, "status", "availableReplicas")
+				readyReplicas, _, _ := unstructured.NestedInt64(obj.Object, "status", "readyReplicas")
+				t.Logf("Deployment %s/%s status: replicas=%d, available=%d, ready=%d",
+					namespace, name, replicas, availableReplicas, readyReplicas)
+			}
+		} else {
+			t.Logf("Resource %s %s/%s is ready", gvk.Kind, namespace, name)
+		}
+
+		return ready, nil
 	})
 }
 
