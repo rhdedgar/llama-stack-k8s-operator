@@ -44,14 +44,17 @@ func TestCreationSuite(t *testing.T) {
 	})
 
 	t.Run("should check health status", func(t *testing.T) {
+		time.Sleep(5 * time.Second) // Add delay to reduce API pressure
 		testHealthStatus(t, llsdistributionCR)
 	})
 
 	t.Run("should update deployment through CR", func(t *testing.T) {
+		time.Sleep(5 * time.Second) // Add delay to reduce API pressure
 		testCRDeploymentUpdate(t, llsdistributionCR)
 	})
 
 	t.Run("should update distribution status", func(t *testing.T) {
+		time.Sleep(5 * time.Second) // Add delay to reduce API pressure
 		testDistributionStatus(t, llsdistributionCR)
 	})
 
@@ -199,8 +202,12 @@ func testHealthStatus(t *testing.T, distribution *v1alpha1.LlamaStackDistributio
 		return
 	}
 
-	// Wait for status to be updated with a longer interval to avoid rate limiting
-	err := wait.PollUntilContextTimeout(TestEnv.Ctx, 1*time.Minute, 5*time.Minute, true, func(ctx context.Context) (bool, error) {
+	// Create a context with a longer timeout specifically for this operation
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	// Wait for status to be updated with moderate interval to avoid rate limiting
+	err := wait.PollUntilContextTimeout(ctx, 30*time.Second, 10*time.Minute, true, func(ctx context.Context) (bool, error) {
 		// Get the latest state of the distribution
 		updatedDistribution := &v1alpha1.LlamaStackDistribution{}
 		err := TestEnv.Client.Get(ctx, client.ObjectKey{
@@ -223,8 +230,12 @@ func testDistributionStatus(t *testing.T, llsdistributionCR *v1alpha1.LlamaStack
 		return
 	}
 
+	// Create a context with a longer timeout specifically for this operation
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
 	// Wait for status to be updated with distribution info
-	err := wait.PollUntilContextTimeout(TestEnv.Ctx, 1*time.Minute, 5*time.Minute, true, func(ctx context.Context) (bool, error) {
+	err := wait.PollUntilContextTimeout(ctx, 30*time.Second, 10*time.Minute, true, func(ctx context.Context) (bool, error) {
 		updatedDistribution := &v1alpha1.LlamaStackDistribution{}
 		err := TestEnv.Client.Get(ctx, client.ObjectKey{
 			Namespace: llsdistributionCR.Namespace,
@@ -333,7 +344,7 @@ func testServiceAccountOverride(t *testing.T, distribution *v1alpha1.LlamaStackD
 	defer TestEnv.Client.Delete(TestEnv.Ctx, sa)
 
 	// Update the CR to use the custom ServiceAccount with retry logic
-	err := wait.PollUntilContextTimeout(TestEnv.Ctx, time.Second, 30*time.Second, true, func(ctx context.Context) (bool, error) {
+	err := wait.PollUntilContextTimeout(TestEnv.Ctx, 5*time.Second, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		// Get the latest version of the CR
 		latestDistribution := &v1alpha1.LlamaStackDistribution{}
 		if err := TestEnv.Client.Get(ctx, client.ObjectKey{

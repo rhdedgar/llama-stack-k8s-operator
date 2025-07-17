@@ -19,3 +19,6 @@ package controllers
 
 // NetworkPolicy permissions - controller creates and manages network policies
 //+kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
+
+// ODH ConfigMap permissions - controller reads ODH trusted CA bundle ConfigMap in the same namespace as LlamaStackDistribution
+//+kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch,resourceNames=odh-trusted-ca-bundle

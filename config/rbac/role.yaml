@@ -17,6 +17,16 @@ rules:
   - watch
 - apiGroups:
   - ""
+  resourceNames:
+  - odh-trusted-ca-bundle
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
   resources:
   - persistentvolumeclaims
   verbs:

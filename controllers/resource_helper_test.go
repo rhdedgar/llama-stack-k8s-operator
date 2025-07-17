@@ -50,12 +50,22 @@ func TestBuildContainerSpec(t *testing.T) {
 				Name:  llamav1alpha1.DefaultContainerName,
 				Image: "test-image:latest",
 				Ports: []corev1.ContainerPort{{ContainerPort: llamav1alpha1.DefaultServerPort}},
-				VolumeMounts: []corev1.VolumeMount{{
-					Name:      "lls-storage",
-					MountPath: llamav1alpha1.DefaultMountPath,
-				}},
+				VolumeMounts: []corev1.VolumeMount{
+					{
+						Name:      "lls-storage",
+						MountPath: llamav1alpha1.DefaultMountPath,
+					},
+					{
+						Name:      "ca-bundle",
+						MountPath: "/etc/ssl/certs/odh-ca-bundle.crt",
+						SubPath:   "odh-ca-bundle.crt",
+						ReadOnly:  true,
+					},
+				},
 				Env: []corev1.EnvVar{
 					{Name: "HF_HOME", Value: "/.llama"},
+					{Name: "SSL_CERT_FILE", Value: "/etc/ssl/certs/odh-ca-bundle.crt"},
+					{Name: "SSL_CERT_DIR", Value: "/etc/ssl/certs"},
 				},
 			},
 		},
@@ -96,12 +106,22 @@ func TestBuildContainerSpec(t *testing.T) {
 				},
 				Env: []corev1.EnvVar{
 					{Name: "HF_HOME", Value: "/custom/path"},
+					{Name: "SSL_CERT_FILE", Value: "/etc/ssl/certs/odh-ca-bundle.crt"},
+					{Name: "SSL_CERT_DIR", Value: "/etc/ssl/certs"},
 					{Name: "TEST_ENV", Value: "test-value"},
 				},
-				VolumeMounts: []corev1.VolumeMount{{
-					Name:      "lls-storage",
-					MountPath: "/custom/path",
-				}},
+				VolumeMounts: []corev1.VolumeMount{
+					{
+						Name:      "lls-storage",
+						MountPath: "/custom/path",
+					},
+					{
+						Name:      "ca-bundle",
+						MountPath: "/etc/ssl/certs/odh-ca-bundle.crt",
+						SubPath:   "odh-ca-bundle.crt",
+						ReadOnly:  true,
+					},
+				},
 				Command: nil,
 			},
 		},
@@ -124,12 +144,22 @@ func TestBuildContainerSpec(t *testing.T) {
 				Command: []string{"/custom/entrypoint.sh"},
 				Args:    []string{"--config", "/etc/config.yaml", "--debug"},
 				Ports:   []corev1.ContainerPort{{ContainerPort: llamav1alpha1.DefaultServerPort}},
-				VolumeMounts: []corev1.VolumeMount{{
-					Name:      "lls-storage",
-					MountPath: llamav1alpha1.DefaultMountPath,
-				}},
+				VolumeMounts: []corev1.VolumeMount{
+					{
+						Name:      "lls-storage",
+						MountPath: llamav1alpha1.DefaultMountPath,
+					},
+					{
+						Name:      "ca-bundle",
+						MountPath: "/etc/ssl/certs/odh-ca-bundle.crt",
+						SubPath:   "odh-ca-bundle.crt",
+						ReadOnly:  true,
+					},
+				},
 				Env: []corev1.EnvVar{
 					{Name: "HF_HOME", Value: "/.llama"},
+					{Name: "SSL_CERT_FILE", Value: "/etc/ssl/certs/odh-ca-bundle.crt"},
+					{Name: "SSL_CERT_DIR", Value: "/etc/ssl/certs"},
 				},
 			},
 		},
@@ -158,6 +188,8 @@ func TestBuildContainerSpec(t *testing.T) {
 				Args:            []string{"--config", "/etc/llama-stack/run.yaml"},
 				Env: []corev1.EnvVar{
 					{Name: "HF_HOME", Value: llamav1alpha1.DefaultMountPath},
+					{Name: "SSL_CERT_FILE", Value: "/etc/ssl/certs/odh-ca-bundle.crt"},
+					{Name: "SSL_CERT_DIR", Value: "/etc/ssl/certs"},
 				},
 				VolumeMounts: []corev1.VolumeMount{
 					{
@@ -167,6 +199,12 @@ func TestBuildContainerSpec(t *testing.T) {
 					{
 						Name:      "user-config",
 						MountPath: "/etc/llama-stack/",
+						ReadOnly:  true,
+					},
+					{
+						Name:      "ca-bundle",
+						MountPath: "/etc/ssl/certs/odh-ca-bundle.crt",
+						SubPath:   "odh-ca-bundle.crt",
 						ReadOnly:  true,
 					},
 				},

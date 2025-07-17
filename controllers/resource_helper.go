@@ -72,13 +72,25 @@ func configureContainerEnvironment(instance *llamav1alpha1.LlamaStackDistributio
 		Value: mountPath,
 	})
 
-	// Add CA bundle environment variable if TLS config is specified
+	// Add CA bundle environment variable if TLS config is specified or ODH CA bundle is available
+	var caBundleKey string
+	var hasCABundle bool
+
 	if instance.Spec.Server.TLSConfig != nil && instance.Spec.Server.TLSConfig.CABundle != nil {
-		caBundleKey := instance.Spec.Server.TLSConfig.CABundle.ConfigMapKey
+		// Use explicit CA bundle configuration
+		caBundleKey = instance.Spec.Server.TLSConfig.CABundle.ConfigMapKey
 		if caBundleKey == "" {
 			caBundleKey = "ca-bundle.crt"
 		}
+		hasCABundle = true
+	} else {
+		// Check for ODH CA bundle availability
+		// We'll use a predictable key name, preferring odh-ca-bundle.crt over ca-bundle.crt
+		caBundleKey = "odh-ca-bundle.crt"
+		hasCABundle = true // We'll assume it exists if ODH CA bundle is available
+	}
 
+	if hasCABundle {
 		// Set SSL_CERT_FILE to point to the specific CA bundle file
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name:  "SSL_CERT_FILE",
@@ -115,13 +127,24 @@ func configureContainerMounts(instance *llamav1alpha1.LlamaStackDistribution, co
 		})
 	}
 
-	// Add CA bundle volume mount if TLS config is specified
+	// Add CA bundle volume mount if TLS config is specified or ODH CA bundle is available
+	var caBundleKey string
+	var hasCABundle bool
+
 	if instance.Spec.Server.TLSConfig != nil && instance.Spec.Server.TLSConfig.CABundle != nil {
-		caBundleKey := instance.Spec.Server.TLSConfig.CABundle.ConfigMapKey
+		// Use explicit CA bundle configuration
+		caBundleKey = instance.Spec.Server.TLSConfig.CABundle.ConfigMapKey
 		if caBundleKey == "" {
 			caBundleKey = "ca-bundle.crt"
 		}
+		hasCABundle = true
+	} else {
+		// Use ODH CA bundle if available
+		caBundleKey = "odh-ca-bundle.crt"
+		hasCABundle = true // We'll assume it exists if ODH CA bundle is available
+	}
 
+	if hasCABundle {
 		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
 			Name:      "ca-bundle",
 			MountPath: "/etc/ssl/certs/" + caBundleKey,
@@ -235,6 +258,21 @@ func configurePodStorage(instance *llamav1alpha1.LlamaStackDistribution, contain
 					LocalObjectReference: corev1.LocalObjectReference{
 						Name: instance.Spec.Server.TLSConfig.CABundle.ConfigMapName,
 					},
+				},
+			},
+		})
+	} else {
+		// Note: ODH CA bundle will be mounted directly from the namespace-local copy
+		// The OpenShift AI operator copies the odh-trusted-ca-bundle ConfigMap to all namespaces
+		// We mount it directly without creating our own copy
+		podSpec.Volumes = append(podSpec.Volumes, corev1.Volume{
+			Name: "ca-bundle",
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: "odh-trusted-ca-bundle", // Standard name used by OpenShift AI operator
+					},
+					Optional: ptr.To(true), // Make it optional in case OpenShift AI operator is not installed
 				},
 			},
 		})

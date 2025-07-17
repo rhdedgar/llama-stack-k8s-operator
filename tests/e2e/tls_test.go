@@ -514,7 +514,7 @@ func yamlSplit(data []byte) [][]byte {
 func waitForDeploymentCreation(t *testing.T, namespace, name string, timeout time.Duration) error {
 	t.Helper()
 
-	return wait.PollUntilContextTimeout(TestEnv.Ctx, 10*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
+	return wait.PollUntilContextTimeout(TestEnv.Ctx, 20*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
 		// First check if the LlamaStackDistribution is being processed
 		distribution := &v1alpha1.LlamaStackDistribution{}
 		err := TestEnv.Client.Get(ctx, client.ObjectKey{

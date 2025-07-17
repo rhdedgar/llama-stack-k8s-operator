@@ -57,6 +57,12 @@ const (
 	operatorConfigData = "llama-stack-operator-config"
 	manifestsBasePath  = "manifests/base"
 	caBundleKey        = "ca-bundle.crt"
+
+	// ODH trusted CA bundle constants.
+	ODHTrustedCABundleNamespace = "redhat-ods-applications"
+	ODHTrustedCABundleConfigMap = "odh-trusted-ca-bundle"
+	ODHCABundleKey              = "odh-ca-bundle.crt"
+	ODHCABundleKeyAlt           = "ca-bundle.crt"
 )
 
 // LlamaStackDistributionReconciler reconciles a LlamaStack object.
@@ -298,6 +304,11 @@ func (r *LlamaStackDistributionReconciler) reconcileConfigMaps(ctx context.Conte
 		}
 	}
 
+	// Reconcile ODH CA bundle if available
+	if r.hasODHCABundle(ctx, instance) {
+		r.reconcileODHCABundle(ctx, instance)
+	}
+
 	return nil
 }
 
@@ -338,6 +349,15 @@ func (r *LlamaStackDistributionReconciler) SetupWithManager(ctx context.Context,
 				UpdateFunc: r.configMapUpdatePredicate,
 				CreateFunc: r.configMapCreatePredicate,
 				DeleteFunc: r.configMapDeletePredicate,
+			}),
+		).
+		Watches(
+			&corev1.ConfigMap{},
+			handler.EnqueueRequestsFromMapFunc(r.findLlamaStackDistributionsForODHCABundle),
+			builder.WithPredicates(predicate.Funcs{
+				UpdateFunc: r.odhCABundleUpdatePredicate,
+				CreateFunc: r.odhCABundleCreatePredicate,
+				DeleteFunc: r.odhCABundleDeletePredicate,
 			}),
 		).
 		Complete(r)
@@ -560,6 +580,17 @@ func (r *LlamaStackDistributionReconciler) isConfigMapReferenced(configMap clien
 		found = len(caBundleLlamaStacks.Items) > 0
 	}
 
+	// Check for auto CA bundle ConfigMap references if not found in user config or CA bundle
+	if !found {
+		autoCABundleLlamaStacks := llamav1alpha1.LlamaStackDistributionList{}
+		err := r.List(context.Background(), &autoCABundleLlamaStacks, client.MatchingFields{"spec.server.tlsConfig.caBundle.configMapName": indexKey})
+		if err != nil {
+			logger.Info("Auto CA bundle field indexer not supported, falling back to manual ConfigMap reference check", "error", err.Error())
+			return r.manuallyCheckConfigMapReference(configMap)
+		}
+		found = len(autoCABundleLlamaStacks.Items) > 0
+	}
+
 	if !found {
 		// Fallback: manually check all LlamaStackDistributions
 		manuallyFound := r.manuallyCheckConfigMapReference(configMap)
@@ -588,24 +619,8 @@ func (r *LlamaStackDistributionReconciler) manuallyCheckConfigMapReference(confi
 	targetName := configMap.GetName()
 
 	for _, ls := range allLlamaStacks.Items {
-		// Check user config ConfigMap references
-		if hasValidUserConfig(&ls) {
-			configMapNamespace := getUserConfigMapNamespaceStandalone(&ls)
-
-			if configMapNamespace == targetNamespace && ls.Spec.Server.UserConfig.ConfigMapName == targetName {
-				// found a LlamaStackDistribution that references the ConfigMap
-				return true
-			}
-		}
-
-		// Check CA bundle ConfigMap references
-		if hasValidCABundleConfig(&ls) {
-			configMapNamespace := getCABundleConfigMapNamespaceStandalone(&ls)
-
-			if configMapNamespace == targetNamespace && ls.Spec.Server.TLSConfig.CABundle.ConfigMapName == targetName {
-				// found a LlamaStackDistribution that references the CA bundle ConfigMap
-				return true
-			}
+		if r.doesLlamaStackReferenceConfigMap(context.Background(), ls, targetNamespace, targetName) {
+			return true
 		}
 	}
 
@@ -654,10 +669,20 @@ func (r *LlamaStackDistributionReconciler) tryFieldIndexerLookup(ctx context.Con
 		return userConfigLlamaStacks, len(userConfigLlamaStacks.Items) > 0
 	}
 
+	// Check for auto CA bundle ConfigMap references
+	autoCABundleLlamaStacks := llamav1alpha1.LlamaStackDistributionList{}
+	err = r.List(ctx, &autoCABundleLlamaStacks, client.MatchingFields{"spec.server.tlsConfig.caBundle.configMapName": indexKey})
+	if err != nil {
+		logger.Info("Auto CA bundle field indexer not supported, will fall back to a manual search for ConfigMap event processing",
+			"indexKey", indexKey, "error", err.Error())
+		return userConfigLlamaStacks, len(userConfigLlamaStacks.Items) > 0
+	}
+
 	// Combine results from both searches
 	combinedLlamaStacks := llamav1alpha1.LlamaStackDistributionList{}
 	combinedLlamaStacks.Items = append(combinedLlamaStacks.Items, userConfigLlamaStacks.Items...)
 	combinedLlamaStacks.Items = append(combinedLlamaStacks.Items, caBundleLlamaStacks.Items...)
+	combinedLlamaStacks.Items = append(combinedLlamaStacks.Items, autoCABundleLlamaStacks.Items...)
 
 	return combinedLlamaStacks, len(combinedLlamaStacks.Items) > 0
 }
@@ -676,21 +701,21 @@ func (r *LlamaStackDistributionReconciler) performManualSearch(ctx context.Conte
 	}
 
 	// Filter for ConfigMap references
-	filteredItems := r.filterLlamaStacksForConfigMap(allLlamaStacks.Items, configMap)
+	filteredItems := r.filterLlamaStacksForConfigMap(ctx, allLlamaStacks.Items, configMap)
 	allLlamaStacks.Items = filteredItems
 
 	return allLlamaStacks
 }
 
 // filterLlamaStacksForConfigMap filters LlamaStackDistributions that reference the given ConfigMap.
-func (r *LlamaStackDistributionReconciler) filterLlamaStacksForConfigMap(llamaStacks []llamav1alpha1.LlamaStackDistribution,
+func (r *LlamaStackDistributionReconciler) filterLlamaStacksForConfigMap(ctx context.Context, llamaStacks []llamav1alpha1.LlamaStackDistribution,
 	configMap client.Object) []llamav1alpha1.LlamaStackDistribution {
 	var filteredItems []llamav1alpha1.LlamaStackDistribution
 	targetNamespace := configMap.GetNamespace()
 	targetName := configMap.GetName()
 
 	for _, ls := range llamaStacks {
-		if r.doesLlamaStackReferenceConfigMap(ls, targetNamespace, targetName) {
+		if r.doesLlamaStackReferenceConfigMap(ctx, ls, targetNamespace, targetName) {
 			filteredItems = append(filteredItems, ls)
 		}
 	}
@@ -699,7 +724,7 @@ func (r *LlamaStackDistributionReconciler) filterLlamaStacksForConfigMap(llamaSt
 }
 
 // doesLlamaStackReferenceConfigMap checks if a LlamaStackDistribution references the specified ConfigMap.
-func (r *LlamaStackDistributionReconciler) doesLlamaStackReferenceConfigMap(ls llamav1alpha1.LlamaStackDistribution, targetNamespace, targetName string) bool {
+func (r *LlamaStackDistributionReconciler) doesLlamaStackReferenceConfigMap(ctx context.Context, ls llamav1alpha1.LlamaStackDistribution, targetNamespace, targetName string) bool {
 	// Check user config ConfigMap references
 	if hasValidUserConfig(&ls) {
 		configMapNamespace := getUserConfigMapNamespaceStandalone(&ls)
@@ -712,6 +737,13 @@ func (r *LlamaStackDistributionReconciler) doesLlamaStackReferenceConfigMap(ls l
 	if hasValidCABundleConfig(&ls) {
 		configMapNamespace := getCABundleConfigMapNamespaceStandalone(&ls)
 		if configMapNamespace == targetNamespace && ls.Spec.Server.TLSConfig.CABundle.ConfigMapName == targetName {
+			return true
+		}
+	}
+
+	// Check ODH CA bundle ConfigMap references
+	if r.hasODHCABundle(ctx, &ls) {
+		if targetNamespace == ls.Namespace && targetName == ODHTrustedCABundleConfigMap {
 			return true
 		}
 	}
@@ -1284,6 +1316,62 @@ func (r *LlamaStackDistributionReconciler) reconcileCABundleConfigMap(ctx contex
 	return nil
 }
 
+// reconcileODHCABundle handles ODH trusted CA bundle configuration.
+func (r *LlamaStackDistributionReconciler) reconcileODHCABundle(ctx context.Context, instance *llamav1alpha1.LlamaStackDistribution) {
+	logger := log.FromContext(ctx)
+
+	// Skip ODH CA bundle if CA bundle is explicitly configured
+	if r.hasCABundleConfigMap(instance) {
+		logger.V(1).Info("CA bundle explicitly configured, skipping ODH CA bundle")
+		return
+	}
+
+	// Check if ODH trusted CA bundle ConfigMap exists in the same namespace
+	if !r.isODHCABundleAvailableInNamespace(ctx, instance.Namespace) {
+		logger.V(1).Info("ODH trusted CA bundle ConfigMap not found in namespace",
+			"configMapName", ODHTrustedCABundleConfigMap,
+			"namespace", instance.Namespace)
+		return
+	}
+
+	logger.V(1).Info("ODH trusted CA bundle ConfigMap found in namespace, will be mounted directly",
+		"configMapName", ODHTrustedCABundleConfigMap,
+		"namespace", instance.Namespace)
+}
+
+// isODHCABundleAvailableInNamespace checks if the ODH trusted CA bundle ConfigMap exists in the specified namespace.
+func (r *LlamaStackDistributionReconciler) isODHCABundleAvailableInNamespace(ctx context.Context, namespace string) bool {
+	configMap := &corev1.ConfigMap{}
+	err := r.Get(ctx, types.NamespacedName{
+		Name:      ODHTrustedCABundleConfigMap,
+		Namespace: namespace,
+	}, configMap)
+
+	if err != nil {
+		return false
+	}
+
+	// Check if either key exists
+	if _, exists := configMap.Data[ODHCABundleKey]; exists {
+		return true
+	}
+	if _, exists := configMap.Data[ODHCABundleKeyAlt]; exists {
+		return true
+	}
+
+	return false
+}
+
+// hasODHCABundle checks if the instance should use the ODH CA bundle.
+func (r *LlamaStackDistributionReconciler) hasODHCABundle(ctx context.Context, instance *llamav1alpha1.LlamaStackDistribution) bool {
+	// Use ODH CA bundle if no explicit CA bundle is configured and ODH ConfigMap is available in same namespace
+	if r.hasCABundleConfigMap(instance) {
+		return false
+	}
+
+	return r.isODHCABundleAvailableInNamespace(ctx, instance.Namespace)
+}
+
 // getConfigMapHash calculates a hash of the ConfigMap data to detect changes.
 func (r *LlamaStackDistributionReconciler) getConfigMapHash(ctx context.Context, instance *llamav1alpha1.LlamaStackDistribution) (string, error) {
 	if !r.hasUserConfigMap(instance) {
@@ -1412,4 +1500,85 @@ func NewLlamaStackDistributionReconciler(ctx context.Context, client client.Clie
 		EnableNetworkPolicy: enableNetworkPolicy,
 		ClusterInfo:         clusterInfo,
 	}, nil
+}
+
+// findLlamaStackDistributionsForODHCABundle finds all LlamaStackDistributions that should be reconciled when ODH CA bundle ConfigMap changes.
+func (r *LlamaStackDistributionReconciler) findLlamaStackDistributionsForODHCABundle(ctx context.Context, obj client.Object) []reconcile.Request {
+	logger := log.FromContext(ctx)
+
+	// Watch for the ODH trusted CA bundle ConfigMap in any namespace (since OpenShift AI operator copies it everywhere)
+	if obj.GetName() != ODHTrustedCABundleConfigMap {
+		return nil
+	}
+
+	logger.V(1).Info("ODH trusted CA bundle ConfigMap changed, triggering reconcile for LlamaStackDistributions in same namespace",
+		"configMapName", obj.GetName(),
+		"configMapNamespace", obj.GetNamespace())
+
+	// List LlamaStackDistributions in the same namespace as the changed ConfigMap
+	llamaStackList := &llamav1alpha1.LlamaStackDistributionList{}
+	if err := r.List(ctx, llamaStackList, client.InNamespace(obj.GetNamespace())); err != nil {
+		logger.Error(err, "Failed to list LlamaStackDistributions in namespace", "namespace", obj.GetNamespace())
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for _, llamaStack := range llamaStackList.Items {
+		// Only reconcile LlamaStackDistributions that don't have explicit CA bundle configured
+		if llamaStack.Spec.Server.TLSConfig == nil || llamaStack.Spec.Server.TLSConfig.CABundle == nil {
+			requests = append(requests, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      llamaStack.Name,
+					Namespace: llamaStack.Namespace,
+				},
+			})
+		}
+	}
+
+	logger.V(1).Info("ODH CA bundle ConfigMap change will trigger reconcile", "requests", len(requests))
+	return requests
+}
+
+// odhCABundleUpdatePredicate handles ODH CA bundle ConfigMap update events.
+func (r *LlamaStackDistributionReconciler) odhCABundleUpdatePredicate(e event.UpdateEvent) bool {
+	// Watch for the ODH trusted CA bundle ConfigMap in any namespace
+	if e.ObjectNew.GetName() != ODHTrustedCABundleConfigMap {
+		return false
+	}
+
+	// Check if the CA bundle data has changed
+	oldConfigMap, oldOk := e.ObjectOld.(*corev1.ConfigMap)
+	newConfigMap, newOk := e.ObjectNew.(*corev1.ConfigMap)
+
+	if !oldOk || !newOk {
+		return false
+	}
+
+	// Check if either of the CA bundle keys have changed
+	oldODHBundle := oldConfigMap.Data[ODHCABundleKey]
+	newODHBundle := newConfigMap.Data[ODHCABundleKey]
+	oldCABundle := oldConfigMap.Data[ODHCABundleKeyAlt]
+	newCABundle := newConfigMap.Data[ODHCABundleKeyAlt]
+
+	return oldODHBundle != newODHBundle || oldCABundle != newCABundle
+}
+
+// odhCABundleCreatePredicate handles ODH CA bundle ConfigMap create events.
+func (r *LlamaStackDistributionReconciler) odhCABundleCreatePredicate(e event.CreateEvent) bool {
+	// Watch for the ODH trusted CA bundle ConfigMap in any namespace
+	if e.Object.GetName() != ODHTrustedCABundleConfigMap {
+		return false
+	}
+
+	return true
+}
+
+// odhCABundleDeletePredicate handles ODH CA bundle ConfigMap delete events.
+func (r *LlamaStackDistributionReconciler) odhCABundleDeletePredicate(e event.DeleteEvent) bool {
+	// Watch for the ODH trusted CA bundle ConfigMap in any namespace
+	if e.Object.GetName() != ODHTrustedCABundleConfigMap {
+		return false
+	}
+
+	return true
 }

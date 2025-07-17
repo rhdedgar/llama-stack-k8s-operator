@@ -28,9 +28,9 @@ import (
 
 const (
 	ollamaNS             = "ollama-dist"
-	pollInterval         = 10 * time.Second
-	ResourceReadyTimeout = 5 * time.Minute
-	generalRetryInterval = 5 * time.Second
+	pollInterval         = 20 * time.Second
+	ResourceReadyTimeout = 10 * time.Minute
+	generalRetryInterval = 10 * time.Second
 )
 
 var (
@@ -51,11 +51,20 @@ func SetupTestEnv() (*TestEnvironment, error) {
 		return nil, err
 	}
 
+	// Disable rate limiting completely for test environment to avoid throttling
+	// during polling operations. E2E tests involve multiple concurrent polling
+	// operations across different test functions.
+	// cfg.QPS = -1 // Disable rate limiting
+	// cfg.Burst = 0
+
 	// Create a new client
 	cl, err := client.New(cfg, client.Options{Scheme: Scheme})
 	if err != nil {
 		return nil, err
 	}
+
+	// Log the client configuration for debugging
+	// log.Printf("Kubernetes client configured with QPS: %f, Burst: %d", cfg.QPS, cfg.Burst)
 
 	return &TestEnvironment{
 		Client: cl,
