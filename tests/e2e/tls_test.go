@@ -95,20 +95,9 @@ func testLlamaStackWithCABundle(t *testing.T) {
 	err = verifyLlamaStackTLSConfig(t, llsTestNS, "llamastack-with-config")
 	require.NoError(t, err)
 
-	// Restart the deployment to pick up the updated ConfigMap
-	err = restartDeployment(t, llsTestNS, "llamastack-with-config")
-	require.NoError(t, err)
-
-	// Wait for LlamaStack deployment to be created (not necessarily ready)
-	err = wait.PollUntilContextTimeout(TestEnv.Ctx, 10*time.Second, 2*time.Minute, true, func(ctx context.Context) (bool, error) {
-		deployment := &appsv1.Deployment{}
-		err = TestEnv.Client.Get(ctx, client.ObjectKey{
-			Namespace: llsTestNS,
-			Name:      "llamastack-with-config",
-		}, deployment)
-		return err == nil, nil
-	})
-	require.NoError(t, err, "LlamaStack deployment should be created")
+	// Wait for the operator to process the LlamaStackDistribution and create the deployment
+	err = waitForDeploymentCreation(t, llsTestNS, "llamastack-with-config", 3*time.Minute)
+	require.NoError(t, err, "LlamaStack deployment should be created by operator")
 
 	// Verify certificate volumes are mounted correctly
 	err = verifyCertificateMounts(t, llsTestNS, "llamastack-with-config")
@@ -342,34 +331,6 @@ func updateCABundleConfigMap(t *testing.T, targetNS string) error {
 	return nil
 }
 
-func restartDeployment(t *testing.T, namespace, name string) error {
-	t.Helper()
-
-	// Get the deployment
-	deployment := &appsv1.Deployment{}
-	err := TestEnv.Client.Get(TestEnv.Ctx, client.ObjectKey{
-		Namespace: namespace,
-		Name:      name,
-	}, deployment)
-	if err != nil {
-		return fmt.Errorf("failed to get deployment: %w", err)
-	}
-
-	// Add a restart annotation to trigger pod restart
-	if deployment.Spec.Template.Annotations == nil {
-		deployment.Spec.Template.Annotations = make(map[string]string)
-	}
-	deployment.Spec.Template.Annotations["kubectl.kubernetes.io/restartedAt"] = time.Now().Format(time.RFC3339)
-
-	// Update the deployment
-	err = TestEnv.Client.Update(TestEnv.Ctx, deployment)
-	if err != nil {
-		return fmt.Errorf("failed to update deployment: %w", err)
-	}
-
-	return nil
-}
-
 func deployLlamaStackWithCABundle(t *testing.T) error {
 	t.Helper()
 
@@ -548,4 +509,41 @@ func yamlSplit(data []byte) [][]byte {
 	}
 
 	return docs
+}
+
+func waitForDeploymentCreation(t *testing.T, namespace, name string, timeout time.Duration) error {
+	t.Helper()
+
+	return wait.PollUntilContextTimeout(TestEnv.Ctx, 10*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
+		// First check if the LlamaStackDistribution is being processed
+		distribution := &v1alpha1.LlamaStackDistribution{}
+		err := TestEnv.Client.Get(ctx, client.ObjectKey{
+			Namespace: namespace,
+			Name:      name,
+		}, distribution)
+		if err != nil {
+			t.Logf("LlamaStackDistribution not found yet: %v", err)
+			return false, nil
+		}
+
+		t.Logf("LlamaStackDistribution status: Phase=%s", distribution.Status.Phase)
+
+		// Then check if the deployment has been created
+		deployment := &appsv1.Deployment{}
+		err = TestEnv.Client.Get(ctx, client.ObjectKey{
+			Namespace: namespace,
+			Name:      name,
+		}, deployment)
+		if err != nil {
+			if k8serrors.IsNotFound(err) {
+				t.Logf("Deployment %s not created yet by operator, continuing to wait...", name)
+				return false, nil
+			}
+			t.Logf("Error getting deployment: %v", err)
+			return false, err
+		}
+
+		t.Logf("Deployment %s found, created by operator", name)
+		return true, nil
+	})
 }
