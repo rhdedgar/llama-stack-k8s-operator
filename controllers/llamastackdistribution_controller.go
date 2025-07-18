@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -56,7 +57,7 @@ import (
 const (
 	operatorConfigData = "llama-stack-operator-config"
 	manifestsBasePath  = "manifests/base"
-	caBundleKey        = "ca-bundle.crt"
+	defaultCABundleKey = "ca-bundle.crt"
 )
 
 // LlamaStackDistributionReconciler reconciles a LlamaStack object.
@@ -1262,24 +1263,32 @@ func (r *LlamaStackDistributionReconciler) reconcileCABundleConfigMap(ctx contex
 		return fmt.Errorf("failed to fetch CA bundle ConfigMap %s/%s: %w", configMapNamespace, instance.Spec.Server.TLSConfig.CABundle.ConfigMapName, err)
 	}
 
-	// Validate that the specified key exists in the ConfigMap
-	specCABundleKey := instance.Spec.Server.TLSConfig.CABundle.ConfigMapKey
-	if specCABundleKey == "" {
-		specCABundleKey = caBundleKey
+	// Validate that the specified keys exist in the ConfigMap
+	var keysToValidate []string
+	if len(instance.Spec.Server.TLSConfig.CABundle.ConfigMapKeys) > 0 {
+		keysToValidate = instance.Spec.Server.TLSConfig.CABundle.ConfigMapKeys
+	} else {
+		specCABundleKey := instance.Spec.Server.TLSConfig.CABundle.ConfigMapKey
+		if specCABundleKey == "" {
+			specCABundleKey = defaultCABundleKey
+		}
+		keysToValidate = []string{specCABundleKey}
 	}
 
-	if _, exists := configMap.Data[specCABundleKey]; !exists {
-		logger.Error(err, "CA bundle key not found in ConfigMap",
-			"configMapName", instance.Spec.Server.TLSConfig.CABundle.ConfigMapName,
-			"configMapNamespace", configMapNamespace,
-			"key", specCABundleKey)
-		return fmt.Errorf("failed to find CA bundle key '%s' in ConfigMap %s/%s", specCABundleKey, configMapNamespace, instance.Spec.Server.TLSConfig.CABundle.ConfigMapName)
+	for _, key := range keysToValidate {
+		if _, exists := configMap.Data[key]; !exists {
+			logger.Error(err, "CA bundle key not found in ConfigMap",
+				"configMapName", instance.Spec.Server.TLSConfig.CABundle.ConfigMapName,
+				"configMapNamespace", configMapNamespace,
+				"key", key)
+			return fmt.Errorf("failed to find CA bundle key '%s' in ConfigMap %s/%s", key, configMapNamespace, instance.Spec.Server.TLSConfig.CABundle.ConfigMapName)
+		}
 	}
 
 	logger.V(1).Info("CA bundle ConfigMap found and validated",
 		"configMap", configMap.Name,
 		"namespace", configMap.Namespace,
-		"key", specCABundleKey,
+		"keys", keysToValidate,
 		"dataKeys", len(configMap.Data))
 	return nil
 }
@@ -1323,7 +1332,19 @@ func (r *LlamaStackDistributionReconciler) getCABundleConfigMapHash(ctx context.
 	}
 
 	// Create a content-based hash that will change when the ConfigMap data changes
-	return fmt.Sprintf("%s-%s", configMap.ResourceVersion, configMap.Name), nil
+	// Include information about which keys are being used
+	var keyInfo string
+	if len(instance.Spec.Server.TLSConfig.CABundle.ConfigMapKeys) > 0 {
+		keyInfo = fmt.Sprintf("-%s", strings.Join(instance.Spec.Server.TLSConfig.CABundle.ConfigMapKeys, ","))
+	} else {
+		key := instance.Spec.Server.TLSConfig.CABundle.ConfigMapKey
+		if key == "" {
+			key = defaultCABundleKey
+		}
+		keyInfo = fmt.Sprintf("-%s", key)
+	}
+
+	return fmt.Sprintf("%s-%s%s", configMap.ResourceVersion, configMap.Name, keyInfo), nil
 }
 
 // createDefaultConfigMap creates a ConfigMap with default feature flag values.

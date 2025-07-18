@@ -30,9 +30,6 @@ func TestCreationSuite(t *testing.T) {
 
 	t.Run("should create LlamaStackDistribution", func(t *testing.T) {
 		llsdistributionCR = testCreateDistribution(t)
-		if llsdistributionCR == nil {
-			t.Log("LlamaStackDistribution creation failed, subsequent tests will be skipped")
-		}
 	})
 
 	t.Run("should create PVC if storage is configured", func(t *testing.T) {
@@ -70,8 +67,7 @@ func testCreateDistribution(t *testing.T) *v1alpha1.LlamaStackDistribution {
 	}
 	err := TestEnv.Client.Create(TestEnv.Ctx, ns)
 	if err != nil && !k8serrors.IsAlreadyExists(err) {
-		t.Logf("Failed to create namespace: %v", err)
-		return nil
+		require.NoError(t, err)
 	}
 
 	// Get sample CR
@@ -80,8 +76,7 @@ func testCreateDistribution(t *testing.T) *v1alpha1.LlamaStackDistribution {
 
 	err = TestEnv.Client.Create(TestEnv.Ctx, llsdistributionCR)
 	if err != nil && !k8serrors.IsAlreadyExists(err) {
-		t.Logf("Failed to create LlamaStackDistribution: %v", err)
-		return nil
+		require.NoError(t, err)
 	}
 
 	// Wait for deployment to be ready
@@ -90,10 +85,7 @@ func testCreateDistribution(t *testing.T) *v1alpha1.LlamaStackDistribution {
 		Version: "v1",
 		Kind:    "Deployment",
 	}, llsdistributionCR.Name, ns.Name, ResourceReadyTimeout, isDeploymentReady)
-	if err != nil {
-		t.Logf("Failed to wait for deployment to be ready: %v", err)
-		return nil
-	}
+	require.NoError(t, err)
 
 	// Verify service is created
 	err = EnsureResourceReady(t, TestEnv, schema.GroupVersionKind{
@@ -106,22 +98,13 @@ func testCreateDistribution(t *testing.T) *v1alpha1.LlamaStackDistribution {
 		status, statusFound, _ := unstructured.NestedMap(u.Object, "status")
 		return specFound && statusFound && spec != nil && status != nil
 	})
-	if err != nil {
-		t.Logf("Failed to wait for service to be ready: %v", err)
-		return nil
-	}
+	require.NoError(t, err)
 
 	return llsdistributionCR
 }
 
 func testDirectDeploymentUpdates(t *testing.T, distribution *v1alpha1.LlamaStackDistribution) {
 	t.Helper()
-
-	if distribution == nil {
-		t.Skip("Skipping deployment update test - distribution creation failed")
-		return
-	}
-
 	// Get the deployment
 	deployment := &appsv1.Deployment{}
 	err := TestEnv.Client.Get(TestEnv.Ctx, client.ObjectKey{
@@ -149,12 +132,6 @@ func testDirectDeploymentUpdates(t *testing.T, distribution *v1alpha1.LlamaStack
 
 func testCRDeploymentUpdate(t *testing.T, distribution *v1alpha1.LlamaStackDistribution) {
 	t.Helper()
-
-	if distribution == nil {
-		t.Skip("Skipping CR deployment update test - distribution creation failed")
-		return
-	}
-
 	// Update CR
 	err := TestEnv.Client.Get(TestEnv.Ctx, client.ObjectKey{
 		Namespace: distribution.Namespace,
@@ -193,12 +170,6 @@ func testCRDeploymentUpdate(t *testing.T, distribution *v1alpha1.LlamaStackDistr
 
 func testHealthStatus(t *testing.T, distribution *v1alpha1.LlamaStackDistribution) {
 	t.Helper()
-
-	if distribution == nil {
-		t.Skip("Skipping health status test - distribution creation failed")
-		return
-	}
-
 	// Wait for status to be updated with a longer interval to avoid rate limiting
 	err := wait.PollUntilContextTimeout(TestEnv.Ctx, 1*time.Minute, 5*time.Minute, true, func(ctx context.Context) (bool, error) {
 		// Get the latest state of the distribution
@@ -217,12 +188,6 @@ func testHealthStatus(t *testing.T, distribution *v1alpha1.LlamaStackDistributio
 
 func testDistributionStatus(t *testing.T, llsdistributionCR *v1alpha1.LlamaStackDistribution) {
 	t.Helper()
-
-	if llsdistributionCR == nil {
-		t.Skip("Skipping distribution status test - distribution creation failed")
-		return
-	}
-
 	// Wait for status to be updated with distribution info
 	err := wait.PollUntilContextTimeout(TestEnv.Ctx, 1*time.Minute, 5*time.Minute, true, func(ctx context.Context) (bool, error) {
 		updatedDistribution := &v1alpha1.LlamaStackDistribution{}
@@ -288,11 +253,6 @@ func testDistributionStatus(t *testing.T, llsdistributionCR *v1alpha1.LlamaStack
 func testPVCConfiguration(t *testing.T, distribution *v1alpha1.LlamaStackDistribution) {
 	t.Helper()
 
-	if distribution == nil {
-		t.Skip("Skipping PVC test - distribution creation failed")
-		return
-	}
-
 	pvcName := distribution.Name + "-pvc"
 	pvc := &corev1.PersistentVolumeClaim{}
 	err := TestEnv.Client.Get(TestEnv.Ctx, client.ObjectKey{
@@ -316,11 +276,6 @@ func testPVCConfiguration(t *testing.T, distribution *v1alpha1.LlamaStackDistrib
 
 func testServiceAccountOverride(t *testing.T, distribution *v1alpha1.LlamaStackDistribution) {
 	t.Helper()
-
-	if distribution == nil {
-		t.Skip("Skipping service account override test - distribution creation failed")
-		return
-	}
 
 	// Create a custom ServiceAccount
 	sa := &corev1.ServiceAccount{
