@@ -141,17 +141,6 @@ func generateCertificates(t *testing.T) {
 	projectRoot, err := filepath.Abs("../..")
 	require.NoError(t, err, "Failed to get project root")
 
-	// Check if certificates already exist
-	caCertsDir := filepath.Join(projectRoot, "config", "samples", "vllm-ca-certs")
-
-	caBundlePath := filepath.Join(caCertsDir, "ca-bundle.crt")
-
-	// Check if both certificate files exist
-	if _, err = os.Stat(caBundlePath); err == nil {
-		t.Log("Certificates already exist, skipping generation")
-		return
-	}
-
 	// Run the certificate generation script
 	scriptPath := filepath.Join(projectRoot, "config", "samples", "generate_certificates.sh")
 	t.Logf("Running certificate generation script: %s", scriptPath)

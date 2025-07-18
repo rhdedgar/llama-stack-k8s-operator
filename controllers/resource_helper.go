@@ -19,6 +19,7 @@ package controllers
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	llamav1alpha1 "github.com/llamastack/llama-stack-k8s-operator/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
@@ -74,21 +75,12 @@ func configureContainerEnvironment(instance *llamav1alpha1.LlamaStackDistributio
 
 	// Add CA bundle environment variable if TLS config is specified
 	if instance.Spec.Server.TLSConfig != nil && instance.Spec.Server.TLSConfig.CABundle != nil {
-		caBundleKey := instance.Spec.Server.TLSConfig.CABundle.ConfigMapKey
-		if caBundleKey == "" {
-			caBundleKey = "ca-bundle.crt"
-		}
+		caBundleKey := getCABundleKey(instance.Spec.Server.TLSConfig.CABundle)
 
 		// Set SSL_CERT_FILE to point to the specific CA bundle file
 		container.Env = append(container.Env, corev1.EnvVar{
 			Name:  "SSL_CERT_FILE",
 			Value: "/etc/ssl/certs/" + caBundleKey,
-		})
-
-		// Also set SSL_CERT_DIR for applications that prefer directory-based CA lookup
-		container.Env = append(container.Env, corev1.EnvVar{
-			Name:  "SSL_CERT_DIR",
-			Value: "/etc/ssl/certs",
 		})
 	}
 
@@ -98,37 +90,14 @@ func configureContainerEnvironment(instance *llamav1alpha1.LlamaStackDistributio
 
 // configureContainerMounts sets up volume mounts for the container.
 func configureContainerMounts(instance *llamav1alpha1.LlamaStackDistribution, container *corev1.Container) {
-	mountPath := getMountPath(instance)
-
 	// Add volume mount for storage
-	container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
-		Name:      "lls-storage",
-		MountPath: mountPath,
-	})
+	addStorageVolumeMount(instance, container)
 
 	// Add ConfigMap volume mount if user config is specified
-	if instance.Spec.Server.UserConfig != nil && instance.Spec.Server.UserConfig.ConfigMapName != "" {
-		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
-			Name:      "user-config",
-			MountPath: "/etc/llama-stack/",
-			ReadOnly:  true,
-		})
-	}
+	addUserConfigVolumeMount(instance, container)
 
 	// Add CA bundle volume mount if TLS config is specified
-	if instance.Spec.Server.TLSConfig != nil && instance.Spec.Server.TLSConfig.CABundle != nil {
-		caBundleKey := instance.Spec.Server.TLSConfig.CABundle.ConfigMapKey
-		if caBundleKey == "" {
-			caBundleKey = "ca-bundle.crt"
-		}
-
-		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
-			Name:      "ca-bundle",
-			MountPath: "/etc/ssl/certs/" + caBundleKey,
-			SubPath:   caBundleKey,
-			ReadOnly:  true,
-		})
-	}
+	addCABundleVolumeMount(instance, container)
 }
 
 // configureContainerCommands sets up container commands and args.
@@ -157,93 +126,260 @@ func getMountPath(instance *llamav1alpha1.LlamaStackDistribution) string {
 	return llamav1alpha1.DefaultMountPath
 }
 
+// addStorageVolumeMount adds the storage volume mount to the container.
+func addStorageVolumeMount(instance *llamav1alpha1.LlamaStackDistribution, container *corev1.Container) {
+	mountPath := getMountPath(instance)
+	container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
+		Name:      "lls-storage",
+		MountPath: mountPath,
+	})
+}
+
+// addUserConfigVolumeMount adds the user config volume mount to the container if specified.
+func addUserConfigVolumeMount(instance *llamav1alpha1.LlamaStackDistribution, container *corev1.Container) {
+	if instance.Spec.Server.UserConfig != nil && instance.Spec.Server.UserConfig.ConfigMapName != "" {
+		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
+			Name:      "user-config",
+			MountPath: "/etc/llama-stack/",
+			ReadOnly:  true,
+		})
+	}
+}
+
+// addCABundleVolumeMount adds the CA bundle volume mount to the container if TLS config is specified.
+func addCABundleVolumeMount(instance *llamav1alpha1.LlamaStackDistribution, container *corev1.Container) {
+	if instance.Spec.Server.TLSConfig != nil && instance.Spec.Server.TLSConfig.CABundle != nil {
+		caBundleKey := getCABundleKey(instance.Spec.Server.TLSConfig.CABundle)
+
+		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
+			Name:      "ca-bundle",
+			MountPath: "/etc/ssl/certs/" + caBundleKey,
+			SubPath:   caBundleKey,
+			ReadOnly:  true,
+		})
+	}
+}
+
+// getCABundleKey returns the effective CA bundle key name for volume mounting.
+// When multiple keys are specified, we use "ca-bundle.crt" as the consolidated filename.
+func getCABundleKey(caBundleConfig *llamav1alpha1.CABundleConfig) string {
+	// If multiple keys are specified, use a standard filename for the consolidated bundle
+	if len(caBundleConfig.ConfigMapKeys) > 0 {
+		return "ca-bundle.crt"
+	}
+
+	// Use legacy single key behavior
+	if caBundleConfig.ConfigMapKey != "" {
+		return caBundleConfig.ConfigMapKey
+	}
+
+	// Default fallback
+	return defaultCABundleKey
+}
+
+// createCABundleVolume creates the appropriate volume configuration for CA bundles.
+// For single key: uses direct ConfigMap volume.
+// For multiple keys: uses emptyDir volume with InitContainer to concatenate keys.
+func createCABundleVolume(caBundleConfig *llamav1alpha1.CABundleConfig) corev1.Volume {
+	// For multiple keys, we'll use an emptyDir that gets populated by an InitContainer
+	if len(caBundleConfig.ConfigMapKeys) > 0 {
+		return corev1.Volume{
+			Name: "ca-bundle",
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{},
+			},
+		}
+	}
+
+	// For single key (legacy behavior), use direct ConfigMap volume
+	return corev1.Volume{
+		Name: "ca-bundle",
+		VolumeSource: corev1.VolumeSource{
+			ConfigMap: &corev1.ConfigMapVolumeSource{
+				LocalObjectReference: corev1.LocalObjectReference{
+					Name: caBundleConfig.ConfigMapName,
+				},
+			},
+		},
+	}
+}
+
+// createCABundleInitContainer creates an InitContainer that concatenates multiple CA bundle keys
+// from a ConfigMap into a single file in the shared ca-bundle volume.
+func createCABundleInitContainer(caBundleConfig *llamav1alpha1.CABundleConfig) corev1.Container {
+	// Build the shell command to concatenate all specified keys
+	keyPaths := make([]string, 0, len(caBundleConfig.ConfigMapKeys))
+
+	for _, key := range caBundleConfig.ConfigMapKeys {
+		keyPaths = append(keyPaths, "/tmp/ca-source/"+key)
+	}
+
+	// Command to concatenate all keys into the target file
+	command := fmt.Sprintf("cat %s > /etc/ssl/certs/ca-bundle.crt", strings.Join(keyPaths, " "))
+
+	return corev1.Container{
+		Name:  "ca-bundle-init",
+		Image: "registry.access.redhat.com/ubi9/ubi-minimal:latest",
+		Command: []string{
+			"/bin/sh",
+			"-c",
+			command,
+		},
+		VolumeMounts: []corev1.VolumeMount{
+			{
+				Name:      "ca-bundle-source",
+				MountPath: "/tmp/ca-source",
+				ReadOnly:  true,
+			},
+			{
+				Name:      "ca-bundle",
+				MountPath: "/etc/ssl/certs",
+			},
+		},
+	}
+}
+
 // configurePodStorage configures the pod storage and returns the complete pod spec.
 func configurePodStorage(instance *llamav1alpha1.LlamaStackDistribution, container corev1.Container) corev1.PodSpec {
 	podSpec := corev1.PodSpec{
 		Containers: []corev1.Container{container},
 	}
 
-	// Add storage volume
-	if instance.Spec.Server.Storage != nil {
-		// Use PVC for persistent storage
-		podSpec.Volumes = append(podSpec.Volumes, corev1.Volume{
-			Name: "lls-storage",
-			VolumeSource: corev1.VolumeSource{
-				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-					ClaimName: instance.Name + "-pvc",
-				},
-			},
-		})
+	// Configure storage volumes and init containers
+	configureStorage(instance, &podSpec)
 
-		// Add init container to fix permissions on the PVC mount
-		mountPath := llamav1alpha1.DefaultMountPath
-		if instance.Spec.Server.Storage.MountPath != "" {
-			mountPath = instance.Spec.Server.Storage.MountPath
-		}
+	// Configure TLS CA bundle
+	configureTLSCABundle(instance, &podSpec)
 
-		initContainer := corev1.Container{
-			Name:  "update-pvc-permissions",
-			Image: "registry.access.redhat.com/ubi9/ubi-minimal:latest",
-			Command: []string{
-				"/bin/sh",
-				"-c",
-				fmt.Sprintf("chown --verbose --recursive 1001:0 %s", mountPath),
-			},
-			VolumeMounts: []corev1.VolumeMount{
-				{
-					Name:      "lls-storage",
-					MountPath: mountPath,
-				},
-			},
-			SecurityContext: &corev1.SecurityContext{
-				RunAsUser:  ptr.To(int64(0)), // Run as root to be able to change ownership
-				RunAsGroup: ptr.To(int64(0)),
-			},
-		}
-
-		podSpec.InitContainers = append(podSpec.InitContainers, initContainer)
-	} else {
-		// Use emptyDir for non-persistent storage
-		podSpec.Volumes = append(podSpec.Volumes, corev1.Volume{
-			Name: "lls-storage",
-			VolumeSource: corev1.VolumeSource{
-				EmptyDir: &corev1.EmptyDirVolumeSource{},
-			},
-		})
-	}
-
-	// Add ConfigMap volume if user config is specified
-	if instance.Spec.Server.UserConfig != nil && instance.Spec.Server.UserConfig.ConfigMapName != "" {
-		podSpec.Volumes = append(podSpec.Volumes, corev1.Volume{
-			Name: "user-config",
-			VolumeSource: corev1.VolumeSource{
-				ConfigMap: &corev1.ConfigMapVolumeSource{
-					LocalObjectReference: corev1.LocalObjectReference{
-						Name: instance.Spec.Server.UserConfig.ConfigMapName,
-					},
-				},
-			},
-		})
-	}
-
-	// Add CA bundle ConfigMap volume if TLS config is specified
-	if instance.Spec.Server.TLSConfig != nil && instance.Spec.Server.TLSConfig.CABundle != nil {
-		podSpec.Volumes = append(podSpec.Volumes, corev1.Volume{
-			Name: "ca-bundle",
-			VolumeSource: corev1.VolumeSource{
-				ConfigMap: &corev1.ConfigMapVolumeSource{
-					LocalObjectReference: corev1.LocalObjectReference{
-						Name: instance.Spec.Server.TLSConfig.CABundle.ConfigMapName,
-					},
-				},
-			},
-		})
-	}
+	// Configure user config
+	configureUserConfig(instance, &podSpec)
 
 	// Apply pod overrides including ServiceAccount, volumes, and volume mounts
 	configurePodOverrides(instance, &podSpec)
 
 	return podSpec
+}
+
+// configureStorage handles storage volume configuration.
+func configureStorage(instance *llamav1alpha1.LlamaStackDistribution, podSpec *corev1.PodSpec) {
+	if instance.Spec.Server.Storage != nil {
+		configurePersistentStorage(instance, podSpec)
+	} else {
+		configureEmptyDirStorage(podSpec)
+	}
+}
+
+// configurePersistentStorage sets up PVC-based storage with init container for permissions.
+func configurePersistentStorage(instance *llamav1alpha1.LlamaStackDistribution, podSpec *corev1.PodSpec) {
+	// Use PVC for persistent storage
+	podSpec.Volumes = append(podSpec.Volumes, corev1.Volume{
+		Name: "lls-storage",
+		VolumeSource: corev1.VolumeSource{
+			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+				ClaimName: instance.Name + "-pvc",
+			},
+		},
+	})
+
+	// Add init container to fix permissions on the PVC mount.
+	mountPath := llamav1alpha1.DefaultMountPath
+	if instance.Spec.Server.Storage.MountPath != "" {
+		mountPath = instance.Spec.Server.Storage.MountPath
+	}
+
+	commands := []string{
+		fmt.Sprintf("mkdir -p %s", mountPath),
+		fmt.Sprintf("(chown 1001:0 %s 2>/dev/null || echo 'Warning: Could not change ownership')", mountPath),
+		fmt.Sprintf("ls -la %s", mountPath),
+	}
+	command := strings.Join(commands, " && ")
+
+	initContainer := corev1.Container{
+		Name:  "update-pvc-permissions",
+		Image: "registry.access.redhat.com/ubi9/ubi-minimal:latest",
+		Command: []string{
+			"/bin/sh",
+			"-c",
+			// Try to set permissions, but don't fail if we can't
+			command,
+		},
+		VolumeMounts: []corev1.VolumeMount{
+			{
+				Name:      "lls-storage",
+				MountPath: mountPath,
+			},
+		},
+		SecurityContext: &corev1.SecurityContext{
+			RunAsUser:  ptr.To(int64(0)), // Run as root to be able to change ownership
+			RunAsGroup: ptr.To(int64(0)),
+		},
+	}
+
+	podSpec.InitContainers = append(podSpec.InitContainers, initContainer)
+}
+
+// configureEmptyDirStorage sets up temporary storage using emptyDir.
+func configureEmptyDirStorage(podSpec *corev1.PodSpec) {
+	// Use emptyDir for non-persistent storage
+	podSpec.Volumes = append(podSpec.Volumes, corev1.Volume{
+		Name: "lls-storage",
+		VolumeSource: corev1.VolumeSource{
+			EmptyDir: &corev1.EmptyDirVolumeSource{},
+		},
+	})
+}
+
+// configureTLSCABundle handles TLS CA bundle configuration.
+func configureTLSCABundle(instance *llamav1alpha1.LlamaStackDistribution, podSpec *corev1.PodSpec) {
+	tlsConfig := instance.Spec.Server.TLSConfig
+	if tlsConfig == nil || tlsConfig.CABundle == nil {
+		return
+	}
+
+	// Add CA bundle InitContainer if multiple keys are specified
+	if len(tlsConfig.CABundle.ConfigMapKeys) > 0 {
+		caBundleInitContainer := createCABundleInitContainer(tlsConfig.CABundle)
+		podSpec.InitContainers = append(podSpec.InitContainers, caBundleInitContainer)
+	}
+
+	// Add CA bundle ConfigMap volume
+	volume := createCABundleVolume(tlsConfig.CABundle)
+	podSpec.Volumes = append(podSpec.Volumes, volume)
+
+	// Add source ConfigMap volume for multiple keys scenario
+	if len(tlsConfig.CABundle.ConfigMapKeys) > 0 {
+		sourceVolume := corev1.Volume{
+			Name: "ca-bundle-source",
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: tlsConfig.CABundle.ConfigMapName,
+					},
+				},
+			},
+		}
+		podSpec.Volumes = append(podSpec.Volumes, sourceVolume)
+	}
+}
+
+// configureUserConfig handles user configuration setup.
+func configureUserConfig(instance *llamav1alpha1.LlamaStackDistribution, podSpec *corev1.PodSpec) {
+	userConfig := instance.Spec.Server.UserConfig
+	if userConfig == nil || userConfig.ConfigMapName == "" {
+		return
+	}
+
+	// Add ConfigMap volume if user config is specified
+	podSpec.Volumes = append(podSpec.Volumes, corev1.Volume{
+		Name: "user-config",
+		VolumeSource: corev1.VolumeSource{
+			ConfigMap: &corev1.ConfigMapVolumeSource{
+				LocalObjectReference: corev1.LocalObjectReference{
+					Name: userConfig.ConfigMapName,
+				},
+			},
+		},
+	})
 }
 
 // configurePodOverrides applies pod-level overrides from the LlamaStackDistribution spec.

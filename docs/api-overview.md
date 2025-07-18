@@ -22,7 +22,8 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `configMapName` _string_ | ConfigMapName is the name of the ConfigMap containing CA bundle certificates |  |  |
 | `configMapNamespace` _string_ | ConfigMapNamespace is the namespace of the ConfigMap (defaults to the same namespace as the CR) |  |  |
-| `configMapKey` _string_ | ConfigMapKey is the key within the ConfigMap that contains the CA bundle data (defaults to "ca-bundle.crt") | ca-bundle.crt |  |
+| `configMapKey` _string_ | ConfigMapKey is the key within the ConfigMap that contains the CA bundle data (defaults to "ca-bundle.crt")<br />Mutually exclusive with ConfigMapKeys | ca-bundle.crt |  |
+| `configMapKeys` _string array_ | ConfigMapKeys specifies multiple keys within the ConfigMap containing CA bundle data<br />All certificates from these keys will be concatenated into a single CA bundle file<br />Mutually exclusive with ConfigMapKey |  |  |
 
 #### ContainerSpec
 

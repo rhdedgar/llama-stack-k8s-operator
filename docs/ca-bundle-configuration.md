@@ -18,6 +18,19 @@ When you configure a CA bundle:
 3. **Environment Variable**: The `SSL_CERT_FILE` environment variable is set to point to the CA bundle
 4. **Automatic Restarts**: Pods restart automatically when the CA bundle ConfigMap changes
 
+### Single Key vs Multiple Keys
+
+**Single Key (configMapKey):**
+- Direct ConfigMap volume mount
+- Certificate file mounted directly from the ConfigMap key
+- Minimal resource overhead
+
+**Multiple Keys (configMapKeys):**
+- Uses an InitContainer to concatenate multiple keys
+- All certificates from specified keys are combined into a single file
+- Slightly higher resource overhead due to InitContainer, but maintains standard SSL behavior
+- The final consolidated file is always named `ca-bundle.crt` regardless of source key names
+
 ## Configuration Options
 
 ### Basic CA Bundle Configuration
@@ -38,11 +51,32 @@ spec:
         # configMapKey: ca-bundle.crt           # Optional - defaults to "ca-bundle.crt"
 ```
 
+### Multiple CA Bundle Keys Configuration (RHOAI Pattern)
+
+```yaml
+apiVersion: llamastack.io/v1alpha1
+kind: LlamaStackDistribution
+metadata:
+  name: my-llama-stack
+spec:
+  server:
+    distribution:
+      name: hf-serverless
+    tlsConfig:
+      caBundle:
+        configMapName: odh-trusted-ca-bundle
+        # configMapNamespace: default  # Optional - defaults to CR namespace
+        configMapKeys:                   # Multiple keys from same ConfigMap
+          - ca-bundle.crt                # CNO-injected cluster CAs
+          - odh-ca-bundle.crt           # User-specified custom CAs
+```
+
 ### Configuration Fields
 
 - `configMapName` (required): Name of the ConfigMap containing CA certificates
 - `configMapNamespace` (optional): Namespace of the ConfigMap. Defaults to the same namespace as the LlamaStackDistribution
-- `configMapKey` (optional): Key within the ConfigMap containing the CA bundle data. Defaults to "ca-bundle.crt"
+- `configMapKey` (optional): Key within the ConfigMap containing the CA bundle data. Defaults to "ca-bundle.crt". **Mutually exclusive with configMapKeys**
+- `configMapKeys` (optional): Array of keys within the ConfigMap containing CA bundle data. All certificates from these keys will be concatenated into a single CA bundle file. **Mutually exclusive with configMapKey**
 
 ## Examples
 
@@ -115,6 +149,46 @@ spec:
       caBundle:
         configMapName: global-ca-bundle
         configMapNamespace: kube-system
+```
+
+### Example 4: RHOAI Pattern with Multiple CA Sources
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: odh-trusted-ca-bundle
+  labels:
+    config.openshift.io/inject-trusted-cabundle: "true"
+data:
+  ca-bundle.crt: |
+    # Populated by Cluster Network Operator (CNO)
+    -----BEGIN CERTIFICATE-----
+    # ... cluster-wide CA certificates ...
+    -----END CERTIFICATE-----
+  odh-ca-bundle.crt: |
+    # User-specified custom CAs from DSCInitialization
+    -----BEGIN CERTIFICATE-----
+    # ... custom CA certificate 1 ...
+    -----END CERTIFICATE-----
+    -----BEGIN CERTIFICATE-----
+    # ... custom CA certificate 2 ...
+    -----END CERTIFICATE-----
+---
+apiVersion: llamastack.io/v1alpha1
+kind: LlamaStackDistribution
+metadata:
+  name: rhoai-llama-stack
+spec:
+  server:
+    distribution:
+      name: hf-serverless
+    tlsConfig:
+      caBundle:
+        configMapName: odh-trusted-ca-bundle
+        configMapKeys:
+          - ca-bundle.crt      # Cluster CAs
+          - odh-ca-bundle.crt  # Custom CAs
 ```
 
 ## Creating CA Bundle ConfigMaps
