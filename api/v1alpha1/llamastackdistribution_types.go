@@ -103,6 +103,7 @@ type TLSConfig struct {
 }
 
 // CABundleConfig defines the CA bundle configuration for custom certificates
+// +kubebuilder:validation:XValidation:rule="!(has(self.configMapKey) && has(self.configMapKeys))",message="Only one of configMapKey or configMapKeys can be specified"
 type CABundleConfig struct {
 	// ConfigMapName is the name of the ConfigMap containing CA bundle certificates
 	ConfigMapName string `json:"configMapName"`
@@ -110,9 +111,15 @@ type CABundleConfig struct {
 	// +optional
 	ConfigMapNamespace string `json:"configMapNamespace,omitempty"`
 	// ConfigMapKey is the key within the ConfigMap that contains the CA bundle data (defaults to "ca-bundle.crt")
+	// Mutually exclusive with ConfigMapKeys
 	// +optional
 	// +kubebuilder:default:="ca-bundle.crt"
 	ConfigMapKey string `json:"configMapKey,omitempty"`
+	// ConfigMapKeys specifies multiple keys within the ConfigMap containing CA bundle data
+	// All certificates from these keys will be concatenated into a single CA bundle file
+	// Mutually exclusive with ConfigMapKey
+	// +optional
+	ConfigMapKeys []string `json:"configMapKeys,omitempty"`
 }
 
 // StorageSpec defines the persistent storage configuration
