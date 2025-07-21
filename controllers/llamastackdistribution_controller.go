@@ -19,6 +19,7 @@ package controllers
 import (
 	"context"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"net/http"
@@ -57,7 +58,19 @@ import (
 const (
 	operatorConfigData = "llama-stack-operator-config"
 	manifestsBasePath  = "manifests/base"
-	defaultCABundleKey = "ca-bundle.crt"
+
+	// CA Bundle related constants.
+	DefaultCABundleKey    = "ca-bundle.crt"
+	CABundleMountPath     = "/etc/ssl/certs/ca-bundle.crt"
+	CABundleTempPath      = "/tmp/ca-bundle/ca-bundle.crt"
+	CABundleVolumeName    = "ca-bundle"
+	CABundleSourceDir     = "/tmp/ca-source"
+	CABundleInitName      = "ca-bundle-init"
+	CABundleSourceVolName = "ca-bundle-source"
+	CABundleTempDir       = "/tmp/ca-bundle"
+
+	// ODH/RHOAI well-known ConfigMap for trusted CA bundles.
+	odhTrustedCABundleConfigMap = "odh-trusted-ca-bundle"
 )
 
 // LlamaStackDistributionReconciler reconciles a LlamaStack object.
@@ -743,10 +756,10 @@ func (r *LlamaStackDistributionReconciler) reconcileDeployment(ctx context.Conte
 	}
 
 	// Build container spec
-	container := buildContainerSpec(instance, resolvedImage)
+	container := buildContainerSpec(ctx, r, instance, resolvedImage)
 
 	// Configure storage
-	podSpec := configurePodStorage(instance, container)
+	podSpec := configurePodStorage(ctx, r, instance, container)
 
 	// Set the service acc
 	// Prepare annotations for the pod template
@@ -1194,6 +1207,13 @@ func (r *LlamaStackDistributionReconciler) reconcileUserConfigMap(ctx context.Co
 	return nil
 }
 
+// isValidPEM validates that the given data contains valid PEM formatted content.
+func isValidPEM(data []byte) bool {
+	// Basic PEM validation using pem.Decode.
+	block, _ := pem.Decode(data)
+	return block != nil
+}
+
 // reconcileCABundleConfigMap validates that the referenced CA bundle ConfigMap exists.
 func (r *LlamaStackDistributionReconciler) reconcileCABundleConfigMap(ctx context.Context, instance *llamav1alpha1.LlamaStackDistribution) error {
 	logger := log.FromContext(ctx)
@@ -1231,11 +1251,8 @@ func (r *LlamaStackDistributionReconciler) reconcileCABundleConfigMap(ctx contex
 	if len(instance.Spec.Server.TLSConfig.CABundle.ConfigMapKeys) > 0 {
 		keysToValidate = instance.Spec.Server.TLSConfig.CABundle.ConfigMapKeys
 	} else {
-		specCABundleKey := instance.Spec.Server.TLSConfig.CABundle.ConfigMapKey
-		if specCABundleKey == "" {
-			specCABundleKey = defaultCABundleKey
-		}
-		keysToValidate = []string{specCABundleKey}
+		// Default to DefaultCABundleKey when no keys are specified
+		keysToValidate = []string{DefaultCABundleKey}
 	}
 
 	for _, key := range keysToValidate {
@@ -1246,6 +1263,30 @@ func (r *LlamaStackDistributionReconciler) reconcileCABundleConfigMap(ctx contex
 				"key", key)
 			return fmt.Errorf("failed to find CA bundle key '%s' in ConfigMap %s/%s", key, configMapNamespace, instance.Spec.Server.TLSConfig.CABundle.ConfigMapName)
 		}
+
+		// Validate that the key contains valid PEM data
+		pemData, exists := configMap.Data[key]
+		if !exists {
+			// This should not happen since we checked above, but just to be safe
+			return fmt.Errorf("failed to find CA bundle key '%s' in ConfigMap %s/%s", key, configMapNamespace, instance.Spec.Server.TLSConfig.CABundle.ConfigMapName)
+		}
+
+		if !isValidPEM([]byte(pemData)) {
+			logger.Error(nil, "CA bundle key contains invalid PEM data",
+				"configMapName", instance.Spec.Server.TLSConfig.CABundle.ConfigMapName,
+				"configMapNamespace", configMapNamespace,
+				"key", key)
+			return fmt.Errorf("failed to validate CA bundle key '%s' in ConfigMap %s/%s: contains invalid PEM data",
+				key,
+				configMapNamespace,
+				instance.Spec.Server.TLSConfig.CABundle.ConfigMapName,
+			)
+		}
+
+		logger.V(1).Info("CA bundle key contains valid PEM data",
+			"configMapName", instance.Spec.Server.TLSConfig.CABundle.ConfigMapName,
+			"configMapNamespace", configMapNamespace,
+			"key", key)
 	}
 
 	logger.V(1).Info("CA bundle ConfigMap found and validated",
@@ -1300,14 +1341,61 @@ func (r *LlamaStackDistributionReconciler) getCABundleConfigMapHash(ctx context.
 	if len(instance.Spec.Server.TLSConfig.CABundle.ConfigMapKeys) > 0 {
 		keyInfo = fmt.Sprintf("-%s", strings.Join(instance.Spec.Server.TLSConfig.CABundle.ConfigMapKeys, ","))
 	} else {
-		key := instance.Spec.Server.TLSConfig.CABundle.ConfigMapKey
-		if key == "" {
-			key = defaultCABundleKey
-		}
-		keyInfo = fmt.Sprintf("-%s", key)
+		// Default to DefaultCABundleKey when no keys are specified
+		keyInfo = fmt.Sprintf("-%s", DefaultCABundleKey)
 	}
 
 	return fmt.Sprintf("%s-%s%s", configMap.ResourceVersion, configMap.Name, keyInfo), nil
+}
+
+// detectODHTrustedCABundle checks if the well-known ODH trusted CA bundle ConfigMap
+// exists in the same namespace as the LlamaStackDistribution and returns its available keys.
+// Returns the ConfigMap and a list of data keys if found, or nil and empty slice if not found.
+func (r *LlamaStackDistributionReconciler) detectODHTrustedCABundle(ctx context.Context, instance *llamav1alpha1.LlamaStackDistribution) (*corev1.ConfigMap, []string, error) {
+	logger := log.FromContext(ctx)
+
+	configMap := &corev1.ConfigMap{}
+	err := r.Get(ctx, types.NamespacedName{
+		Name:      odhTrustedCABundleConfigMap,
+		Namespace: instance.Namespace,
+	}, configMap)
+
+	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			logger.V(1).Info("ODH trusted CA bundle ConfigMap not found, skipping auto-detection",
+				"configMapName", odhTrustedCABundleConfigMap,
+				"namespace", instance.Namespace)
+			return nil, nil, nil
+		}
+		return nil, nil, fmt.Errorf("failed to check for ODH trusted CA bundle ConfigMap %s/%s: %w",
+			instance.Namespace, odhTrustedCABundleConfigMap, err)
+	}
+
+	// Extract available data keys and validate they contain valid PEM data
+	keys := make([]string, 0, len(configMap.Data))
+
+	for key, value := range configMap.Data {
+		// Only include keys that contain valid PEM data
+		if isValidPEM([]byte(value)) {
+			keys = append(keys, key)
+			logger.V(1).Info("Auto-detected CA bundle key contains valid PEM data",
+				"configMapName", odhTrustedCABundleConfigMap,
+				"namespace", instance.Namespace,
+				"key", key)
+		} else {
+			logger.V(1).Info("Auto-detected CA bundle key contains invalid PEM data, skipping",
+				"configMapName", odhTrustedCABundleConfigMap,
+				"namespace", instance.Namespace,
+				"key", key)
+		}
+	}
+
+	logger.V(1).Info("ODH trusted CA bundle ConfigMap detected",
+		"configMapName", odhTrustedCABundleConfigMap,
+		"namespace", instance.Namespace,
+		"availableKeys", keys)
+
+	return configMap, keys, nil
 }
 
 // createDefaultConfigMap creates a ConfigMap with default feature flag values.

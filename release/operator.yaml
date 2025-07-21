@@ -2018,19 +2018,14 @@ spec:
                         description: CABundle defines the CA bundle configuration
                           for custom certificates
                         properties:
-                          configMapKey:
-                            default: ca-bundle.crt
-                            description: |-
-                              ConfigMapKey is the key within the ConfigMap that contains the CA bundle data (defaults to "ca-bundle.crt")
-                              Mutually exclusive with ConfigMapKeys
-                            type: string
                           configMapKeys:
                             description: |-
                               ConfigMapKeys specifies multiple keys within the ConfigMap containing CA bundle data
                               All certificates from these keys will be concatenated into a single CA bundle file
-                              Mutually exclusive with ConfigMapKey
+                              If not specified, defaults to [DefaultCABundleKey]
                             items:
                               type: string
+                            maxItems: 50
                             type: array
                           configMapName:
                             description: ConfigMapName is the name of the ConfigMap
@@ -2043,10 +2038,6 @@ spec:
                         required:
                         - configMapName
                         type: object
-                        x-kubernetes-validations:
-                        - message: Only one of configMapKey or configMapKeys can be
-                            specified
-                          rule: '!(has(self.configMapKey) && has(self.configMapKeys))'
                     type: object
                   userConfig:
                     description: UserConfig defines the user configuration for the
