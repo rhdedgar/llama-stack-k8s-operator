@@ -114,11 +114,16 @@ type CABundleConfig struct {
 	// Mutually exclusive with ConfigMapKeys
 	// +optional
 	// +kubebuilder:default:="ca-bundle.crt"
+	// +kubebuilder:validation:Pattern="^[a-zA-Z0-9]([a-zA-Z0-9\\-_.]*[a-zA-Z0-9])?$"
+	// +kubebuilder:validation:MaxLength=253
 	ConfigMapKey string `json:"configMapKey,omitempty"`
 	// ConfigMapKeys specifies multiple keys within the ConfigMap containing CA bundle data
 	// All certificates from these keys will be concatenated into a single CA bundle file
 	// Mutually exclusive with ConfigMapKey
 	// +optional
+	// +kubebuilder:validation:MaxItems=50
+	// +kubebuilder:validation:Items:Pattern="^[a-zA-Z0-9]([a-zA-Z0-9\\-_.]*[a-zA-Z0-9])?$"
+	// +kubebuilder:validation:Items:MaxLength=253
 	ConfigMapKeys []string `json:"configMapKeys,omitempty"`
 }
 

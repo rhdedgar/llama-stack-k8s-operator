@@ -50,3 +50,6 @@ spec:
         configMapName: custom-ca-bundle
         # configMapNamespace: ""  # Optional - defaults to the same namespace as the CR
         configMapKey: ca-bundle.crt  # Optional - defaults to "ca-bundle.crt"
+        # configMapKeys: # Mutually exclusive with configMapKey. Items will be concatenated into ca-bundle.crt.
+        #   - ca-bundle1.crt
+        #   - ca-bundle2.crt

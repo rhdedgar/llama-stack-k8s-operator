@@ -2014,6 +2014,8 @@ spec:
                             description: |-
                               ConfigMapKey is the key within the ConfigMap that contains the CA bundle data (defaults to "ca-bundle.crt")
                               Mutually exclusive with ConfigMapKeys
+                            maxLength: 253
+                            pattern: ^[a-zA-Z0-9]([a-zA-Z0-9\-_.]*[a-zA-Z0-9])?$
                             type: string
                           configMapKeys:
                             description: |-
@@ -2022,6 +2024,7 @@ spec:
                               Mutually exclusive with ConfigMapKey
                             items:
                               type: string
+                            maxItems: 50
                             type: array
                           configMapName:
                             description: ConfigMapName is the name of the ConfigMap
