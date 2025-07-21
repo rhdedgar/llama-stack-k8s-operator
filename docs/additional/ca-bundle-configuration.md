@@ -75,8 +75,7 @@ spec:
 
 - `configMapName` (required): Name of the ConfigMap containing CA certificates
 - `configMapNamespace` (optional): Namespace of the ConfigMap. Defaults to the same namespace as the LlamaStackDistribution
-- `configMapKey` (optional): Key within the ConfigMap containing the CA bundle data. Defaults to "ca-bundle.crt". **Mutually exclusive with configMapKeys**
-- `configMapKeys` (optional): Array of keys within the ConfigMap containing CA bundle data. All certificates from these keys will be concatenated into a single CA bundle file. **Mutually exclusive with configMapKey**
+- `configMapKeys` (optional): Array of keys within the ConfigMap containing CA bundle data. All certificates from these keys will be concatenated into a single CA bundle file. If not specified, defaults to `["ca-bundle.crt"]`
 
 ## Examples
 

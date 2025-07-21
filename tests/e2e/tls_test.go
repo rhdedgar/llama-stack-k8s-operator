@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/llamastack/llama-stack-k8s-operator/api/v1alpha1"
+	"github.com/llamastack/llama-stack-k8s-operator/controllers"
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -177,7 +178,7 @@ func createCABundleConfigMap(t *testing.T, targetNS string) error {
 	}
 
 	// Read CA bundle
-	caBundle, err := os.ReadFile(filepath.Join(projectRoot, "config", "samples", "vllm-ca-certs", "ca-bundle.crt"))
+	caBundle, err := os.ReadFile(filepath.Join(projectRoot, "config", "samples", "vllm-ca-certs", controllers.DefaultCABundleKey))
 	if err != nil {
 		return fmt.Errorf("failed to read CA bundle: %w", err)
 	}
@@ -188,7 +189,7 @@ func createCABundleConfigMap(t *testing.T, targetNS string) error {
 			Namespace: targetNS,
 		},
 		Data: map[string]string{
-			"ca-bundle.crt": string(caBundle),
+			controllers.DefaultCABundleKey: string(caBundle),
 		},
 	}
 
@@ -206,7 +207,7 @@ func createCABundleConfigMap(t *testing.T, targetNS string) error {
 				return fmt.Errorf("failed to get existing ConfigMap: %w", err)
 			}
 
-			existingConfigMap.Data["ca-bundle.crt"] = string(caBundle)
+			existingConfigMap.Data[controllers.DefaultCABundleKey] = string(caBundle)
 			err = TestEnv.Client.Update(TestEnv.Ctx, existingConfigMap)
 			if err != nil {
 				return fmt.Errorf("failed to update existing ConfigMap: %w", err)
@@ -235,13 +236,13 @@ func verifyCABundleConfigMap(t *testing.T, targetNS string) error {
 	}
 
 	// Verify the CA bundle content exists
-	caBundle, exists := configMap.Data["ca-bundle.crt"]
+	caBundle, exists := configMap.Data[controllers.DefaultCABundleKey]
 	if !exists {
-		return errors.New("CA bundle ConfigMap does not contain ca-bundle.crt key")
+		return fmt.Errorf("failed to find %s CA bundle key in ConfigMap", controllers.DefaultCABundleKey)
 	}
 
 	if len(caBundle) == 0 {
-		return errors.New("CA bundle ConfigMap ca-bundle.crt is empty")
+		return fmt.Errorf("failed to find any keys in CA bundle ConfigMap %s", controllers.DefaultCABundleKey)
 	}
 
 	// Check if CA bundle appears to be a placeholder
@@ -294,7 +295,7 @@ func updateCABundleConfigMap(t *testing.T, targetNS string) error {
 	}
 
 	// Read the actual CA bundle from the file
-	actualCABundle, err := os.ReadFile(filepath.Join(projectRoot, "config", "samples", "vllm-ca-certs", "ca-bundle.crt"))
+	actualCABundle, err := os.ReadFile(filepath.Join(projectRoot, "config", "samples", "vllm-ca-certs", controllers.DefaultCABundleKey))
 	if err != nil {
 		return fmt.Errorf("failed to read CA bundle file: %w", err)
 	}
@@ -310,7 +311,7 @@ func updateCABundleConfigMap(t *testing.T, targetNS string) error {
 	}
 
 	// Update the ConfigMap with the actual CA bundle
-	configMap.Data["ca-bundle.crt"] = string(actualCABundle)
+	configMap.Data[controllers.DefaultCABundleKey] = string(actualCABundle)
 
 	err = TestEnv.Client.Update(TestEnv.Ctx, configMap)
 	if err != nil {
@@ -402,7 +403,7 @@ func hasCABundleMount(containers []corev1.Container) bool {
 
 func hasCABundleMountInContainer(mounts []corev1.VolumeMount) bool {
 	for _, mount := range mounts {
-		if mount.MountPath == "/etc/ssl/certs/ca-bundle.crt" ||
+		if mount.MountPath == controllers.CABundleMountPath ||
 			strings.Contains(mount.MountPath, "ca-bundle") {
 			return true
 		}
@@ -426,7 +427,7 @@ func verifyEnvironmentVariables(t *testing.T, namespace, name string) error {
 	// Check for TLS-related environment variables
 	tlsEnvVarsFound := 0
 	expectedEnvVars := map[string]string{
-		"VLLM_TLS_VERIFY": "/etc/ssl/certs/ca-bundle.crt",
+		"VLLM_TLS_VERIFY": controllers.CABundleMountPath,
 	}
 
 	for _, container := range deployment.Spec.Template.Spec.Containers {
