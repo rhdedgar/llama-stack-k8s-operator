@@ -382,7 +382,7 @@ func (r *LlamaStackDistributionReconciler) createConfigMapFieldIndexer(ctx conte
 	}
 
 	// Create index for ODH trusted CA bundle auto-detection
-	// Index by namespace for LlamaStackDistributions that would use auto-detected ODH CA bundle
+	// Index by namespace for LlamaStackDistributions that would use the auto-detected ODH CA bundle
 	if err := mgr.GetFieldIndexer().IndexField(
 		ctx,
 		&llamav1alpha1.LlamaStackDistribution{},
@@ -431,7 +431,7 @@ func (r *LlamaStackDistributionReconciler) caBundleConfigMapIndexFunc(rawObj cli
 	return []string{indexKey}
 }
 
-// odhCABundleIndexFunc is the indexer function for LlamaStackDistributions that would use auto-detected ODH CA bundle.
+// odhCABundleIndexFunc is the indexer function for LlamaStackDistributions that would use the auto-detected ODH CA bundle.
 // It indexes by namespace for LlamaStackDistributions that don't have explicit CA bundle configuration.
 func (r *LlamaStackDistributionReconciler) odhCABundleIndexFunc(rawObj client.Object) []string {
 	llsd, ok := rawObj.(*llamav1alpha1.LlamaStackDistribution)
@@ -439,7 +439,7 @@ func (r *LlamaStackDistributionReconciler) odhCABundleIndexFunc(rawObj client.Ob
 		return nil
 	}
 
-	// Only index LlamaStackDistributions that would use auto-detected ODH CA bundle
+	// Only index LlamaStackDistributions that would use the auto-detected ODH CA bundle
 	// (i.e., those without explicit CA bundle configuration)
 	if hasValidCABundleConfig(llsd) {
 		return nil
@@ -587,21 +587,54 @@ func (r *LlamaStackDistributionReconciler) configMapDeletePredicate(e event.Dele
 // couldConfigMapBeReferenced performs a fast check to determine if a ConfigMap could potentially be referenced.
 // This is used as an early optimization to avoid expensive lookups for clearly irrelevant ConfigMaps.
 // Returns true if the ConfigMap might be referenced (either explicitly or as ODH CA bundle).
-// Currently optimized for ODH CA bundle detection; can be extended for other patterns in the future.
-//
-//nolint:unparam // returning true for all ConfigMaps is intentional for now, can be optimized later
+// This productionized version leverages field indexers to maintain a cache of referenced ConfigMaps.
 func (r *LlamaStackDistributionReconciler) couldConfigMapBeReferenced(configMap client.Object) bool {
 	// Always check ODH trusted CA bundle ConfigMap
 	if configMap.GetName() == odhTrustedCABundleConfigMap {
 		return true
 	}
 
-	// For all other ConfigMaps, we can't do a cheap pre-check without potentially expensive operations,
-	// so we allow them to proceed to the full reference check.
-	// In practice, most clusters don't have thousands of ConfigMaps being updated constantly,
-	// and the field indexer makes the actual reference check quite efficient.
-	// Future optimization: Could add checks for common ConfigMap naming patterns.
-	return true
+	// Fast check using field indexer lookups to determine if this ConfigMap could be referenced
+	// This avoids the more expensive full reference check for clearly irrelevant ConfigMaps
+	return r.isConfigMapPotentiallyReferenced(configMap)
+}
+
+// isConfigMapPotentiallyReferenced performs an efficient check using field indexers to determine
+// if a ConfigMap could potentially be referenced by any LlamaStackDistribution.
+// This is more efficient than the full isConfigMapReferenced check as it doesn't require
+// checking ODH auto-detection logic or manual fallbacks.
+func (r *LlamaStackDistributionReconciler) isConfigMapPotentiallyReferenced(configMap client.Object) bool {
+	ctx := context.Background()
+	indexKey := fmt.Sprintf("%s/%s", configMap.GetNamespace(), configMap.GetName())
+
+	// Quick check using field indexers - if either fails, we conservatively return true
+	// to avoid false negatives (missing a referenced ConfigMap is worse than a false positive)
+
+	// Check for user config ConfigMap references
+	userConfigLlamaStacks := llamav1alpha1.LlamaStackDistributionList{}
+	if err := r.List(ctx, &userConfigLlamaStacks, client.MatchingFields{"spec.server.userConfig.configMapName": indexKey}); err == nil {
+		if len(userConfigLlamaStacks.Items) > 0 {
+			return true
+		}
+	} else {
+		// Field indexer not available - conservatively return true
+		return true
+	}
+
+	// Check for CA bundle ConfigMap references
+	caBundleLlamaStacks := llamav1alpha1.LlamaStackDistributionList{}
+	if err := r.List(ctx, &caBundleLlamaStacks, client.MatchingFields{"spec.server.tlsConfig.caBundle.configMapName": indexKey}); err == nil {
+		if len(caBundleLlamaStacks.Items) > 0 {
+			return true
+		}
+	} else {
+		// Field indexer not available - conservatively return true
+		return true
+	}
+
+	// If we get here, the field indexers are working and found no references
+	// The ConfigMap is not explicitly referenced by any LlamaStackDistribution
+	return false
 }
 
 // isConfigMapReferenced checks if a ConfigMap is referenced by any LlamaStackDistribution.
@@ -640,7 +673,7 @@ func (r *LlamaStackDistributionReconciler) isConfigMapReferenced(configMap clien
 	// Check for ODH trusted CA bundle ConfigMap (auto-detection) - only if name matches
 	if !found && configMap.GetName() == odhTrustedCABundleConfigMap {
 		// Check if there are any LlamaStackDistributions in this namespace without explicit CA bundle config
-		// that would use auto-detected ODH trusted CA bundle
+		// that would use the auto-detected ODH trusted CA bundle
 		found = r.hasLlamaStacksUsingAutoDetectedCABundle(configMap.GetNamespace())
 	}
 
@@ -656,7 +689,7 @@ func (r *LlamaStackDistributionReconciler) isConfigMapReferenced(configMap clien
 }
 
 // filterLlamaStacksUsingAutoDetectedCABundle filters a list of LlamaStackDistributions to include only those
-// that would use auto-detected ODH trusted CA bundle (i.e., don't have explicit CA bundle configuration).
+// that would use the auto-detected ODH trusted CA bundle (i.e., don't have explicit CA bundle configuration).
 func filterLlamaStacksUsingAutoDetectedCABundle(allLlamaStacks []llamav1alpha1.LlamaStackDistribution) []llamav1alpha1.LlamaStackDistribution {
 	if len(allLlamaStacks) == 0 {
 		return nil
@@ -675,7 +708,7 @@ func filterLlamaStacksUsingAutoDetectedCABundle(allLlamaStacks []llamav1alpha1.L
 }
 
 // hasLlamaStacksUsingAutoDetectedCABundle checks if there are any LlamaStackDistributions in the given namespace
-// that would use auto-detected ODH trusted CA bundle (i.e., don't have explicit CA bundle configuration).
+// that would use the auto-detected ODH trusted CA bundle (i.e., don't have explicit CA bundle configuration).
 // This optimized version uses the field indexer for efficient lookups.
 // Note: Uses context.Background() since it's called from predicate functions that don't have access to context.
 func (r *LlamaStackDistributionReconciler) hasLlamaStacksUsingAutoDetectedCABundle(namespace string) bool {
@@ -812,7 +845,7 @@ func (r *LlamaStackDistributionReconciler) findLlamaStackDistributionsForConfigM
 }
 
 // findLlamaStacksUsingAutoDetectedCABundle finds LlamaStackDistributions in the given namespace
-// that would use auto-detected ODH trusted CA bundle (i.e., don't have explicit CA bundle configuration).
+// that would use the auto-detected ODH trusted CA bundle (i.e., don't have explicit CA bundle configuration).
 // This optimized version uses the field indexer for efficient lookups.
 func (r *LlamaStackDistributionReconciler) findLlamaStacksUsingAutoDetectedCABundle(ctx context.Context, namespace string) llamav1alpha1.LlamaStackDistributionList {
 	logger := log.FromContext(ctx).WithValues(
