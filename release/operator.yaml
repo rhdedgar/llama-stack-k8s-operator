@@ -2268,6 +2268,54 @@ kind: ClusterRole
 metadata:
   labels:
     app.kubernetes.io/name: llama-stack-k8s-operator
+  name: llama-stack-k8s-operator-llsd-editor-role
+rules:
+- apiGroups:
+  - llamastack.io
+  resources:
+  - llamastackdistributions
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - llamastack.io
+  resources:
+  - llamastackdistributions/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: llama-stack-k8s-operator
+  name: llama-stack-k8s-operator-llsd-viewer-role
+rules:
+- apiGroups:
+  - llamastack.io
+  resources:
+  - llamastackdistributions
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - llamastack.io
+  resources:
+  - llamastackdistributions/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: llama-stack-k8s-operator
   name: llama-stack-k8s-operator-manager-role
 rules:
 - apiGroups:

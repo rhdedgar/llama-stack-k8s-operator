@@ -1,20 +1,24 @@
-# permissions for end users to view llamastacks.
+# permissions for end users to edit LlamaStackDistributions.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: llamastack-viewer-role
+  name: llsd-editor-role
 rules:
 - apiGroups:
   - llamastack.io
   resources:
-  - llamastacks
+  - llamastackdistributions
   verbs:
+  - create
+  - delete
   - get
   - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - llamastack.io
   resources:
-  - llamastacks/status
+  - llamastackdistributions/status
   verbs:
   - get
