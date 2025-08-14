@@ -22,7 +22,7 @@ package controllers
 
 //+kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create
 
-// ConfigMap permissions - controller reads user configmaps and manages operator config configmaps
+// ConfigMap permissions - controller creates and manages operator-owned configmaps for CA bundles and user config
 //+kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch
 
 // NetworkPolicy permissions - controller creates and manages network policies
