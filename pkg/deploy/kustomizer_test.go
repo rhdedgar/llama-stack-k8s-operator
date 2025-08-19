@@ -28,7 +28,7 @@ const manifestBasePath = "manifests/base"
 func setupApplyResourcesTest(t *testing.T, ownerName string) (context.Context, string, *llamav1alpha1.LlamaStackDistribution) {
 	t.Helper()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	testNs := "test-apply-" + ownerName
 	ns := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{Name: testNs},
@@ -50,7 +50,7 @@ func setupApplyResourcesTest(t *testing.T, ownerName string) (context.Context, s
 	}
 	ownerGVK := owner.GroupVersionKind()
 
-	require.NoError(t, k8sClient.Create(context.Background(), owner))
+	require.NoError(t, k8sClient.Create(t.Context(), owner))
 	require.NotEmpty(t, owner.UID)
 
 	createdOwner := &llamav1alpha1.LlamaStackDistribution{}
@@ -416,7 +416,7 @@ func TestApplyResources(t *testing.T) {
 		require.Empty(t, createdClusterRole.GetOwnerReferences(), "cluster-scoped resource should not have an owner reference from a namespaced owner")
 
 		// cleanup the clusterrole
-		require.NoError(t, k8sClient.Delete(context.Background(), createdClusterRole))
+		require.NoError(t, k8sClient.Delete(t.Context(), createdClusterRole))
 	})
 }
 
