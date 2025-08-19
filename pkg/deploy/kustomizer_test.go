@@ -28,14 +28,15 @@ const manifestBasePath = "manifests/base"
 func setupApplyResourcesTest(t *testing.T, ownerName string) (context.Context, string, *llamav1alpha1.LlamaStackDistribution) {
 	t.Helper()
 
-	ctx := context.Background()
+	ctx := t.Context()
+	cleanupCtx := context.WithoutCancel(ctx)
 	testNs := "test-apply-" + ownerName
 	ns := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{Name: testNs},
 	}
 	require.NoError(t, k8sClient.Create(ctx, ns))
 	t.Cleanup(func() {
-		require.NoError(t, k8sClient.Delete(ctx, ns))
+		require.NoError(t, k8sClient.Delete(cleanupCtx, ns))
 	})
 
 	owner := &llamav1alpha1.LlamaStackDistribution{
@@ -50,7 +51,7 @@ func setupApplyResourcesTest(t *testing.T, ownerName string) (context.Context, s
 	}
 	ownerGVK := owner.GroupVersionKind()
 
-	require.NoError(t, k8sClient.Create(context.Background(), owner))
+	require.NoError(t, k8sClient.Create(t.Context(), owner))
 	require.NotEmpty(t, owner.UID)
 
 	createdOwner := &llamav1alpha1.LlamaStackDistribution{}
@@ -388,6 +389,7 @@ func TestApplyResources(t *testing.T) {
 	t.Run("creates cluster-scoped objects without owner reference", func(t *testing.T) {
 		// given a namespaced owner (its namespace is irrelevant for this test)
 		ctx, _, owner := setupApplyResourcesTest(t, "cluster-scope-owner")
+		cleanupCtx := context.WithoutCancel(ctx)
 
 		// and a desired cluster-scoped resource (ClusterRole)
 		desiredClusterRole := newTestResource(t, "rbac.authorization.k8s.io/v1", "ClusterRole", "my-test-cluster-role", "" /* No namespace */, map[string]any{
@@ -416,7 +418,7 @@ func TestApplyResources(t *testing.T) {
 		require.Empty(t, createdClusterRole.GetOwnerReferences(), "cluster-scoped resource should not have an owner reference from a namespaced owner")
 
 		// cleanup the clusterrole
-		require.NoError(t, k8sClient.Delete(context.Background(), createdClusterRole))
+		require.NoError(t, k8sClient.Delete(cleanupCtx, createdClusterRole))
 	})
 }
 

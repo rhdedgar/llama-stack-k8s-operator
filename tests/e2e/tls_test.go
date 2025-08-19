@@ -150,12 +150,10 @@ func generateCertificates(t *testing.T) {
 	originalDir, err := os.Getwd()
 	require.NoError(t, err, "Failed to get current directory")
 	defer func() {
-		err = os.Chdir(originalDir)
-		require.NoError(t, err, "Failed to restore original directory")
+		t.Chdir(originalDir)
 	}()
 
-	err = os.Chdir(projectRoot)
-	require.NoError(t, err, "Failed to change to project root")
+	t.Chdir(projectRoot)
 
 	// Execute the script
 	cmd := exec.Command("bash", scriptPath)
