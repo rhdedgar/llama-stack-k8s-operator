@@ -161,7 +161,7 @@ lint-fix: golangci-lint ## Run golangci-lint fix against code.
 
 .PHONY: build
 build: generate fmt vet ## Build manager binary.
-	go build -o bin/manager main.go
+	go build -tags=strictfipsruntime,openssl -o bin/manager main.go
 
 .PHONY: run
 run: manifests generate fmt vet ## Run a controller from your host.
@@ -299,7 +299,7 @@ set -e; \
 package=$(2)@$(3) ;\
 echo "Downloading $${package}" ;\
 rm -f $(1) || true ;\
-GOBIN=$(LOCALBIN) CGO_ENABLED=0 go install -v $${package} ;\
+GOBIN=$(LOCALBIN) CGO_ENABLED=1 GOFLAGS="-tags=strictfipsruntime,openssl" go install -v $${package} ;\
 mv $(1) $(1)-$(3) ;\
 } ;\
 ln -sf $(1)-$(3) $(1)

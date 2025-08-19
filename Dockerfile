@@ -1,10 +1,11 @@
 # Build the manager binary
-ARG GOLANG_VERSION=1.23
+ARG GOLANG_VERSION=1.24
 
 FROM registry.access.redhat.com/ubi9/go-toolset:${GOLANG_VERSION} as builder
 ARG TARGETOS=linux
 ARG TARGETARCH
-ARG CGO_ENABLED=0
+ARG CGO_ENABLED=1
+ARG GOTAGS=strictfipsruntime,openssl
 
 WORKDIR /workspace
 # Copy the Go Modules manifests
@@ -26,7 +27,7 @@ USER root
 
 # GOARCH is intentionally left empty to automatically detect the host architecture
 # This ensures the binary matches the platform where image-build is executed
-RUN CGO_ENABLED=${CGO_ENABLED} GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -a -o manager main.go
+RUN CGO_ENABLED=${CGO_ENABLED} GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -a -tags=${GOTAGS} -o manager main.go
 
 # Use distroless as minimal base image to package the manager binary
 # Refer to https://github.com/GoogleContainerTools/distroless for more details
