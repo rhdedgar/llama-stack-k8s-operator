@@ -218,9 +218,9 @@ server:
 	}
 	require.True(t, userConfigMountFound, "container should have combined-config volume mount for run.yaml")
 
-	// Verify that the container command is configured to use the custom config
-	require.Equal(t, []string{"python", "-m", "llama_stack.distribution.server.server"}, container.Command, "container command should be set for custom config")
-	require.Equal(t, []string{"--config", "/etc/llama-stack/run.yaml"}, container.Args, "container args should point to custom config file")
+	// Verify that the container command is configured to use the custom config with the startup script
+	require.Equal(t, []string{"/bin/sh", "-c", controllers.StartupScript}, container.Command, "container command should be set for custom config")
+	require.Empty(t, container.Args, "container args should be empty when using startup script")
 
 	// Test updating the CustomConfig
 	updatedConfig := customConfig + "\n# Updated configuration"

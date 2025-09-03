@@ -48,8 +48,8 @@ const (
 // Kubernetes ConfigMap keys must be valid DNS subdomain names or data keys.
 var validConfigMapKeyRegex = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9\-_.]*[a-zA-Z0-9])?$`)
 
-// startupScript is the script that will be used to start the server.
-var startupScript = `
+// StartupScript is the script that will be used to start the server.
+var StartupScript = `
 set -e
 
     if python -c "
@@ -192,7 +192,7 @@ func configureContainerCommands(instance *llamav1alpha1.LlamaStackDistribution, 
 		// template. The script will determine the llama-stack version and use the appropriate module
 		// path to start the server.
 
-		container.Command = []string{"/bin/sh", "-c", startupScript}
+		container.Command = []string{"/bin/sh", "-c", StartupScript}
 		container.Args = []string{}
 	}
 
