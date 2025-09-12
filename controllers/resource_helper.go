@@ -365,8 +365,8 @@ done`, CABundleTempPath, CABundleSourceDir, fileList)
 			},
 		},
 		SecurityContext: &corev1.SecurityContext{
-			AllowPrivilegeEscalation: &[]bool{false}[0],
-			RunAsNonRoot:             &[]bool{false}[0],
+			AllowPrivilegeEscalation: ptr.To(false),
+			RunAsNonRoot:             ptr.To(false),
 			Capabilities: &corev1.Capabilities{
 				Drop: []corev1.Capability{"ALL"},
 			},
@@ -446,8 +446,12 @@ func configurePersistentStorage(instance *llamav1alpha1.LlamaStackDistribution, 
 			},
 		},
 		SecurityContext: &corev1.SecurityContext{
-			RunAsUser:  ptr.To(int64(0)), // Run as root to be able to change ownership
-			RunAsGroup: ptr.To(int64(0)),
+			RunAsUser:                ptr.To(int64(0)), // Run as root to be able to change ownership
+			RunAsGroup:               ptr.To(int64(0)),
+			AllowPrivilegeEscalation: ptr.To(false),
+			Capabilities: &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+			},
 		},
 	}
 
@@ -599,6 +603,16 @@ func configurePodOverrides(instance *llamav1alpha1.LlamaStackDistribution, podSp
 		podSpec.ServiceAccountName = instance.Spec.Server.PodOverrides.ServiceAccountName
 	} else {
 		podSpec.ServiceAccountName = instance.Name + "-sa"
+	}
+
+	// Configure pod-level security context for OpenShift SCC compatibility
+	if podSpec.SecurityContext == nil {
+		podSpec.SecurityContext = &corev1.PodSecurityContext{}
+	}
+
+	// Set fsGroup to allow write access to mounted volumes
+	if podSpec.SecurityContext.FSGroup == nil {
+		podSpec.SecurityContext.FSGroup = ptr.To(int64(0))
 	}
 
 	// Apply other pod overrides if specified
