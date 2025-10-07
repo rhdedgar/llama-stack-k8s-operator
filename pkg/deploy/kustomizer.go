@@ -283,17 +283,25 @@ func applyPlugins(resMap *resmap.ResMap, ownerInstance *llamav1alpha1.LlamaStack
 // GetFieldMappings returns essential field mappings for kustomize transformation.
 // The ClusterRoleBinding name includes the namespace prefix to prevent collisions when
 // multiple instances with the same name exist across different namespaces.
-//
-//nolint:funlen // Function contains a list of field mappings that is inherently verbose
 func GetFieldMappings(ownerInstance *llamav1alpha1.LlamaStackDistribution) []plugins.FieldMapping {
-	servicePort := getServicePort(ownerInstance)
-	storageSize := getStorageSize(ownerInstance)
-	instanceName := ownerInstance.GetName()
-	serviceAccountName := getServiceAccountName(ownerInstance)
-	clusterRoleBindingName := ownerInstance.Namespace + "-" + ownerInstance.Name + SCCBindingSuffix
-	operatorNamespace := getOperatorNamespace()
+	var mappings []plugins.FieldMapping
 
-	mappings := []plugins.FieldMapping{
+	// Add mappings by category
+	mappings = append(mappings, getStorageMappings(ownerInstance)...)
+	mappings = append(mappings, getServiceMappings(ownerInstance)...)
+	mappings = append(mappings, getDeploymentMappings(ownerInstance)...)
+	mappings = append(mappings, getNetworkPolicyMappings(ownerInstance)...)
+	mappings = append(mappings, getClusterRoleBindingMappings(ownerInstance)...)
+	mappings = append(mappings, getServiceAccountMappings(ownerInstance)...)
+
+	return mappings
+}
+
+// getStorageMappings returns field mappings for PersistentVolumeClaim storage configuration.
+func getStorageMappings(ownerInstance *llamav1alpha1.LlamaStackDistribution) []plugins.FieldMapping {
+	storageSize := getStorageSize(ownerInstance)
+
+	return []plugins.FieldMapping{
 		{
 			SourceValue:       storageSize,
 			DefaultValue:      llamav1alpha1.DefaultStorageSize.String(),
@@ -301,6 +309,15 @@ func GetFieldMappings(ownerInstance *llamav1alpha1.LlamaStackDistribution) []plu
 			TargetKind:        KindPersistentVolumeClaim,
 			CreateIfNotExists: true,
 		},
+	}
+}
+
+// getServiceMappings returns field mappings for Service configuration.
+func getServiceMappings(ownerInstance *llamav1alpha1.LlamaStackDistribution) []plugins.FieldMapping {
+	servicePort := getServicePort(ownerInstance)
+	instanceName := ownerInstance.GetName()
+
+	return []plugins.FieldMapping{
 		{
 			SourceValue:       servicePort,
 			DefaultValue:      llamav1alpha1.DefaultServerPort,
@@ -321,6 +338,15 @@ func GetFieldMappings(ownerInstance *llamav1alpha1.LlamaStackDistribution) []plu
 			TargetKind:        KindService,
 			CreateIfNotExists: true,
 		},
+	}
+}
+
+// getDeploymentMappings returns field mappings for Deployment configuration.
+func getDeploymentMappings(ownerInstance *llamav1alpha1.LlamaStackDistribution) []plugins.FieldMapping {
+	instanceName := ownerInstance.GetName()
+	serviceAccountName := getServiceAccountName(ownerInstance)
+
+	return []plugins.FieldMapping{
 		{
 			SourceValue:       instanceName,
 			TargetField:       "/metadata/name",
@@ -351,6 +377,16 @@ func GetFieldMappings(ownerInstance *llamav1alpha1.LlamaStackDistribution) []plu
 			TargetKind:        KindDeployment,
 			CreateIfNotExists: true,
 		},
+	}
+}
+
+// getNetworkPolicyMappings returns field mappings for NetworkPolicy configuration.
+func getNetworkPolicyMappings(ownerInstance *llamav1alpha1.LlamaStackDistribution) []plugins.FieldMapping {
+	servicePort := getServicePort(ownerInstance)
+	instanceName := ownerInstance.GetName()
+	operatorNamespace := getOperatorNamespace()
+
+	return []plugins.FieldMapping{
 		{
 			SourceValue:       instanceName,
 			TargetField:       "/spec/podSelector/matchLabels/app.kubernetes.io~1instance",
@@ -378,6 +414,15 @@ func GetFieldMappings(ownerInstance *llamav1alpha1.LlamaStackDistribution) []plu
 			TargetKind:        KindNetworkPolicy,
 			CreateIfNotExists: true,
 		},
+	}
+}
+
+// getClusterRoleBindingMappings returns field mappings for ClusterRoleBinding configuration.
+func getClusterRoleBindingMappings(ownerInstance *llamav1alpha1.LlamaStackDistribution) []plugins.FieldMapping {
+	clusterRoleBindingName := ownerInstance.Namespace + "-" + ownerInstance.Name + SCCBindingSuffix
+	serviceAccountName := getServiceAccountName(ownerInstance)
+
+	return []plugins.FieldMapping{
 		{
 			SourceValue:       clusterRoleBindingName,
 			TargetField:       "/metadata/name",
@@ -396,6 +441,14 @@ func GetFieldMappings(ownerInstance *llamav1alpha1.LlamaStackDistribution) []plu
 			TargetKind:        KindClusterRoleBinding,
 			CreateIfNotExists: true,
 		},
+	}
+}
+
+// getServiceAccountMappings returns field mappings for ServiceAccount configuration.
+func getServiceAccountMappings(ownerInstance *llamav1alpha1.LlamaStackDistribution) []plugins.FieldMapping {
+	serviceAccountName := getServiceAccountName(ownerInstance)
+
+	return []plugins.FieldMapping{
 		{
 			SourceValue:       serviceAccountName,
 			TargetField:       "/metadata/name",
@@ -403,8 +456,6 @@ func GetFieldMappings(ownerInstance *llamav1alpha1.LlamaStackDistribution) []plu
 			CreateIfNotExists: true,
 		},
 	}
-
-	return mappings
 }
 
 // getStorageSize extracts the storage size from the CR spec.
