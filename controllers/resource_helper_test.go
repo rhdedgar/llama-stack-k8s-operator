@@ -160,7 +160,7 @@ func TestBuildContainerSpec(t *testing.T) {
 				ImagePullPolicy: corev1.PullAlways,
 				Ports:           []corev1.ContainerPort{{ContainerPort: llamav1alpha1.DefaultServerPort}},
 				StartupProbe:    newDefaultStartupProbe(llamav1alpha1.DefaultServerPort),
-				Command:         []string{"/bin/sh", "-c", startupScript},
+				Command:         []string{"/bin/bash", "-c", startupScript},
 				Args:            []string{},
 				Env: []corev1.EnvVar{
 					{Name: "HF_HOME", Value: llamav1alpha1.DefaultMountPath},
@@ -596,13 +596,13 @@ func TestValidateConfigMapKeys(t *testing.T) {
 			name:        "command injection attempt",
 			keys:        []string{"valid-key; rm -rf /; echo malicious"},
 			expectError: true,
-			errorMsg:    "contains invalid characters",
+			errorMsg:    "contains invalid path characters",
 		},
 		{
 			name:        "path traversal attempt",
 			keys:        []string{"../../../etc/passwd"},
 			expectError: true,
-			errorMsg:    "contains invalid characters",
+			errorMsg:    "contains invalid path characters",
 		},
 		{
 			name:        "shell metacharacters",
@@ -614,7 +614,7 @@ func TestValidateConfigMapKeys(t *testing.T) {
 			name:        "pipe injection",
 			keys:        []string{"key | cat /etc/passwd"},
 			expectError: true,
-			errorMsg:    "contains invalid characters",
+			errorMsg:    "contains invalid path characters",
 		},
 		{
 			name:        "too long key",
