@@ -164,7 +164,7 @@ func buildContainerSpec(ctx context.Context, r *LlamaStackDistributionReconciler
 	// Configure environment variables and mounts
 	configureContainerEnvironment(ctx, r, instance, &container)
 	configureContainerMounts(ctx, r, instance, &container)
-	configureContainerCommands(ctx, r, instance, &container)
+	configureContainerCommands(instance, &container)
 
 	return container
 }
@@ -242,16 +242,15 @@ func hasAnyCABundle(ctx context.Context, r *LlamaStackDistributionReconciler, in
 }
 
 // configureContainerCommands sets up container commands and args.
-func configureContainerCommands(ctx context.Context, r *LlamaStackDistributionReconciler, instance *llamav1alpha1.LlamaStackDistribution, container *corev1.Container) {
-	// Use startup script if user config is specified OR if any CA bundle is configured (explicit or auto-detected)
+func configureContainerCommands(instance *llamav1alpha1.LlamaStackDistribution, container *corev1.Container) {
+	// Use startup script if user config is specified
+	// The script determines the llama-stack version and uses the appropriate CLI to start the server
 	hasUserConfig := instance.Spec.Server.UserConfig != nil && instance.Spec.Server.UserConfig.ConfigMapName != ""
 
-	if hasUserConfig || hasAnyCABundle(ctx, r, instance) {
+	if hasUserConfig {
 		// Override the container entrypoint to use the startup script
-		// The script will:
-		// 1. Process CA bundle certificates if they exist (explicit or auto-detected ODH bundles)
-		// 2. Determine the llama-stack version and use the appropriate module path to start the server
-		// Use /bin/bash explicitly as the script uses bash-specific features (read -d)
+		// The script will determine the llama-stack version and use the appropriate module path to start the server
+		// Use /bin/bash explicitly as the script uses bash-specific features
 		container.Command = []string{"/bin/bash", "-c", startupScript}
 		container.Args = []string{}
 	}
