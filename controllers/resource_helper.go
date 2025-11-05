@@ -332,7 +332,7 @@ func configurePodStorage(ctx context.Context, r *LlamaStackDistributionReconcile
 		Containers: []corev1.Container{container},
 	}
 
-	// Configure storage volumes and init containers
+	// Configure storage volumes
 	configureStorage(instance, &podSpec)
 
 	// Configure TLS CA bundle (with auto-detection support)
@@ -356,7 +356,7 @@ func configureStorage(instance *llamav1alpha1.LlamaStackDistribution, podSpec *c
 	}
 }
 
-// configurePersistentStorage sets up PVC-based storage with init container for permissions.
+// configurePersistentStorage sets up PVC-based storage.
 func configurePersistentStorage(instance *llamav1alpha1.LlamaStackDistribution, podSpec *corev1.PodSpec) {
 	// Use PVC for persistent storage
 	podSpec.Volumes = append(podSpec.Volumes, corev1.Volume{

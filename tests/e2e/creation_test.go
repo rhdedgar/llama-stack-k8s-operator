@@ -145,12 +145,6 @@ func testCRDeploymentUpdate(t *testing.T, distribution *v1alpha1.LlamaStackDistr
 	}, distribution)
 	require.NoError(t, err)
 
-	// Skip scaling test if PVC with ReadWriteOnce is used (can't attach to multiple nodes)
-	if distribution.Spec.Server.Storage != nil {
-		t.Log("Skipping replica scaling test - PVC with ReadWriteOnce can only be attached to one pod at a time")
-		return
-	}
-
 	// Update replicas
 	distribution.Spec.Replicas = 2
 	err = TestEnv.Client.Update(TestEnv.Ctx, distribution)
