@@ -33,6 +33,9 @@ const (
 	// maxConfigMapKeyLength defines the maximum allowed length for ConfigMap keys
 	// based on Kubernetes DNS subdomain name limits.
 	maxConfigMapKeyLength = 253
+	// FSGroup is the filesystem group ID for the pod.
+	// This is the default group ID for the llama-stack server.
+	FSGroup = int64(1001)
 )
 
 // Probes configuration.
@@ -327,8 +330,12 @@ func createCABundleVolume(managedConfigMapName string) corev1.Volume {
 
 // configurePodStorage configures the pod storage and returns the complete pod spec.
 func configurePodStorage(ctx context.Context, r *LlamaStackDistributionReconciler, instance *llamav1alpha1.LlamaStackDistribution, container corev1.Container) corev1.PodSpec {
+	fsGroup := FSGroup
 	podSpec := corev1.PodSpec{
 		Containers: []corev1.Container{container},
+		SecurityContext: &corev1.PodSecurityContext{
+			FSGroup: &fsGroup,
+		},
 	}
 
 	// Configure storage volumes
