@@ -26,7 +26,6 @@ import (
 	llamav1alpha1 "github.com/llamastack/llama-stack-k8s-operator/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/utils/ptr"
 )
 
 // Constants for validation limits.
@@ -421,17 +420,6 @@ func configurePodOverrides(instance *llamav1alpha1.LlamaStackDistribution, podSp
 		podSpec.ServiceAccountName = instance.Spec.Server.PodOverrides.ServiceAccountName
 	} else {
 		podSpec.ServiceAccountName = instance.Name + "-sa"
-	}
-
-	// Configure pod-level security context for OpenShift SCC compatibility
-	if podSpec.SecurityContext == nil {
-		podSpec.SecurityContext = &corev1.PodSecurityContext{}
-	}
-
-	// Set fsGroup to allow write access to mounted volumes
-	const defaultFSGroup = 1001
-	if podSpec.SecurityContext.FSGroup == nil {
-		podSpec.SecurityContext.FSGroup = ptr.To(int64(defaultFSGroup))
 	}
 
 	// Apply other pod overrides if specified
