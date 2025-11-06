@@ -13,30 +13,33 @@ The CA bundle configuration allows you to:
 
 When you configure a CA bundle:
 
-1. **ConfigMap Storage**: CA certificates are stored in a Kubernetes ConfigMap
-2. **Volume Mounting**: The certificates are mounted at `/etc/ssl/certs/ca-certificates/` in the container
-3. **Certificate Processing**: A startup script processes the certificates, splitting multi-certificate PEM files into individual files and running `c_rehash` to create OpenSSL hash symlinks
-4. **Environment Variable**: The `SSL_CERT_DIR` environment variable is set to point to the processed certificate directory
-5. **Automatic Restarts**: Pods restart automatically when the CA bundle ConfigMap changes
+1. **ConfigMap Storage**: CA certificates are stored in a Kubernetes ConfigMap (source ConfigMap)
+2. **Controller Processing**: The operator controller reads and validates certificates from the source ConfigMap(s)
+3. **Concatenation**: Valid certificates are concatenated into a single PEM file using Go's `encoding/pem` package
+4. **Managed ConfigMap**: The operator creates a managed ConfigMap named `{instance-name}-ca-bundle` containing the concatenated bundle
+5. **Volume Mounting**: The managed ConfigMap is mounted at `/etc/ssl/certs/ca-bundle/ca-bundle.crt` in the container
+6. **Environment Variable**: The `SSL_CERT_FILE` environment variable is automatically set to point to the mounted certificate bundle
+7. **Automatic Restarts**: Pods restart automatically when the source CA bundle ConfigMap changes
 
 ### Certificate Processing
 
-The operator processes CA bundle certificates at container startup:
+The operator processes CA bundle certificates in the controller before deployment:
 
 **Processing Steps:**
-1. ConfigMap keys are mounted as files in `/etc/ssl/certs/ca-certificates/`
-2. Each file is validated to ensure it contains PEM certificates
-3. Multi-certificate PEM files are split into individual certificate files
-4. OpenSSL's `c_rehash` (or `openssl rehash`) creates hash-based symlinks for efficient certificate lookup
-5. The processed certificates are stored in `/tmp/ca-bundle-processed/`
-6. `SSL_CERT_DIR` environment variable points applications to the processed directory
+1. The controller reads CA certificate data from the source ConfigMap(s) specified in `tlsConfig.caBundle`
+2. Each certificate is validated using Go's `encoding/pem` package to ensure proper PEM format
+3. Valid `CERTIFICATE` blocks are extracted and concatenated into a single PEM file
+4. The concatenated bundle is stored in a managed ConfigMap named `{instance-name}-ca-bundle` with key `ca-bundle.crt`
+5. The managed ConfigMap is mounted directly at `/etc/ssl/certs/ca-bundle/ca-bundle.crt` in the pod
+6. The `SSL_CERT_FILE` environment variable is automatically set to point to the mounted bundle file
 
 **Security Features:**
-- Maximum certificate limit (1000) to prevent resource exhaustion attacks
+- Maximum bundle size limit (10MB) to prevent resource exhaustion attacks
+- Maximum certificate count limit (1000 certificates)
 - PEM format validation before processing
-- Null-delimited file handling to prevent filename injection attacks
-- Error handling with automatic cleanup of partial processing
-- Unique temporary files to avoid race conditions
+- Only valid X.509 CERTIFICATE blocks are extracted (other PEM types are ignored)
+- Validation errors prevent deployment with clear error messages in the CR status
+- No runtime dependencies (no openssl or other tools required in the container)
 
 ## Configuration Options
 
@@ -319,7 +322,7 @@ kubectl get configmap my-ca-bundle -o yaml
 kubectl describe pod <llama-stack-pod-name>
 
 # Check mounted certificates
-kubectl exec <llama-stack-pod-name> -- ls -la /etc/ssl/certs/
+kubectl exec <llama-stack-pod-name> -- ls -la /etc/ssl/certs/ca-bundle/
 
 # Check SSL_CERT_FILE environment variable
 kubectl exec <llama-stack-pod-name> -- env | grep SSL_CERT_FILE
@@ -353,13 +356,13 @@ Before deploying a LlamaStackDistribution with CA bundle:
 3. **Namespace Isolation**: Use appropriate namespaces to isolate CA bundles
 4. **Audit Trail**: Monitor ConfigMap changes in production environments
 5. **Principle of Least Privilege**: Only grant necessary permissions to access CA bundle ConfigMaps
-6. **Resource Limits**: The certificate processing has a built-in limit of 1000 certificates to prevent resource exhaustion
-7. **Input Validation**: Certificate files are validated for proper PEM format before processing
-8. **Injection Protection**: Filename handling uses null-delimited processing to prevent injection attacks
+6. **Resource Limits**: The operator enforces limits during certificate concatenation (10MB max bundle size, 1000 max certificates) to prevent resource exhaustion
+7. **Input Validation**: Certificates are validated in the controller using Go's `encoding/pem` package before deployment
 
 ## Limitations
 
 - Only supports PEM format certificates
-- ConfigMap size limits apply (1MB by default)
-- Certificate validation is handled by the underlying Python SSL libraries
+- ConfigMap size limits apply (1MB by default for source ConfigMaps)
+- Maximum bundle size is 10MB and maximum 1000 certificates (enforced by controller)
+- Certificate validation is handled by Go's `encoding/pem` and `crypto/x509` packages in the controller
 - Cross-namespace ConfigMap access requires appropriate RBAC permissions
