@@ -145,6 +145,15 @@ func testCRDeploymentUpdate(t *testing.T, distribution *v1alpha1.LlamaStackDistr
 	}, distribution)
 	require.NoError(t, err)
 
+	// Skip scaling test if PVC with ReadWriteOnce is used
+	// Most cloud providers (AWS EBS, Azure Disk, GCE PD) only support ReadWriteOnce for block storage
+	// ReadWriteMany requires network file systems (NFS, CephFS, etc.) which may not be available
+	if distribution.Spec.Server.Storage != nil {
+		t.Log("Skipping replica scaling test - PVC with ReadWriteOnce can only be attached to one pod at a time")
+		t.Log("To enable replica scaling with persistent storage, configure a StorageClass that supports ReadWriteMany")
+		return
+	}
+
 	// Update replicas
 	distribution.Spec.Replicas = 2
 	err = TestEnv.Client.Update(TestEnv.Ctx, distribution)
