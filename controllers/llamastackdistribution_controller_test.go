@@ -752,4 +752,47 @@ MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA1234567890ABCDEF
 		require.Contains(t, err.Error(), "failed to find valid certificates",
 			"error should indicate no valid certificates")
 	})
+
+	t.Run("rejects invalid X.509 certificates", func(t *testing.T) {
+		// --- arrange ---
+		namespace := createTestNamespace(t, "test-reject-invalid-x509")
+
+		// Create source ConfigMap with malformed certificate data
+		// This has correct PEM structure but invalid X.509 certificate data
+		sourceConfigMap := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "source-with-invalid-cert",
+				Namespace: namespace.Name,
+			},
+			Data: map[string]string{
+				"ca-bundle.crt": `-----BEGIN CERTIFICATE-----
+InvalidCertificateDataThatIsNotValidX509
+-----END CERTIFICATE-----`,
+			},
+		}
+		require.NoError(t, k8sClient.Create(t.Context(), sourceConfigMap))
+
+		instance := NewDistributionBuilder().
+			WithName("test-reject-invalid").
+			WithNamespace(namespace.Name).
+			WithCABundle("source-with-invalid-cert", nil).
+			Build()
+
+		require.NoError(t, k8sClient.Create(t.Context(), instance))
+		t.Cleanup(func() { _ = k8sClient.Delete(t.Context(), instance) })
+
+		// --- act ---
+		reconciler := createTestReconciler()
+		_, err := reconciler.Reconcile(t.Context(), ctrl.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      instance.Name,
+				Namespace: instance.Namespace,
+			},
+		})
+
+		// --- assert ---
+		require.Error(t, err, "reconciliation should fail for invalid X.509 certificate")
+		require.Contains(t, err.Error(), "failed to parse X.509 certificate",
+			"error should indicate X.509 parsing failure")
+	})
 }
