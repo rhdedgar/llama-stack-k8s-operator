@@ -18,6 +18,7 @@ package controllers
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -426,7 +427,28 @@ func (r *LlamaStackDistributionReconciler) reconcileUserAndCABundleConfigMaps(ct
 }
 
 func (r *LlamaStackDistributionReconciler) reconcileManagedCABundle(ctx context.Context, instance *llamav1alpha1.LlamaStackDistribution) error {
+	logger := log.FromContext(ctx)
+	managedConfigMapName := getManagedCABundleConfigMapName(instance)
+
 	if !r.hasCABundleConfigMap(instance) && !r.hasODHTrustedCABundle(ctx, instance) {
+		// No CA bundles configured, delete managed ConfigMap if it exists
+		existingConfigMap := &corev1.ConfigMap{}
+		err := r.Get(ctx, types.NamespacedName{
+			Name:      managedConfigMapName,
+			Namespace: instance.Namespace,
+		}, existingConfigMap)
+
+		if err == nil {
+			// ConfigMap exists but is no longer needed, delete it
+			logger.Info("Deleting unused managed CA bundle ConfigMap", "configMap", managedConfigMapName)
+			if delErr := r.Delete(ctx, existingConfigMap); delErr != nil && !k8serrors.IsNotFound(delErr) {
+				return fmt.Errorf("failed to delete unused managed CA bundle ConfigMap: %w", delErr)
+			}
+			logger.Info("Successfully deleted unused managed CA bundle ConfigMap", "configMap", managedConfigMapName)
+		} else if !k8serrors.IsNotFound(err) {
+			// Unexpected error
+			return fmt.Errorf("failed to check for managed CA bundle ConfigMap: %w", err)
+		}
 		return nil
 	}
 
@@ -1239,9 +1261,9 @@ func (r *LlamaStackDistributionReconciler) hasODHTrustedCABundle(ctx context.Con
 
 // gatherCABundleData collects all CA certificate data from source ConfigMaps and concatenates them.
 // This function implements security measures to prevent injection attacks:
-// - Validates all data as valid PEM before processing.
+// - Validates PEM structure and X.509 certificate format during processing.
 // - Enforces size limits to prevent resource exhaustion.
-// - Only extracts valid CERTIFICATE blocks using PEM decoder.
+// - Only extracts valid CERTIFICATE blocks using PEM decoder and X.509 parser.
 func (r *LlamaStackDistributionReconciler) gatherCABundleData(ctx context.Context, instance *llamav1alpha1.LlamaStackDistribution) (string, error) {
 	logger := log.FromContext(ctx)
 	collector := &certificateCollector{logger: logger}
@@ -1291,10 +1313,20 @@ func (c *certificateCollector) concatenate() (string, error) {
 		return "", errors.New("failed to find valid certificates in CA bundle ConfigMaps")
 	}
 
-	concatenated := strings.Join(c.certificates, "\n")
+	// Use strings.Builder for efficient memory usage with large bundles
+	var builder strings.Builder
+	builder.Grow(c.totalSize + len(c.certificates)) // Pre-allocate with space for newlines
+	for i, cert := range c.certificates {
+		if i > 0 {
+			builder.WriteString("\n")
+		}
+		builder.WriteString(cert)
+	}
+
+	concatenated := builder.String()
 	c.logger.Info("Successfully gathered CA bundle data",
 		"totalCertificates", c.certificateCount,
-		"totalSize", c.totalSize)
+		"totalSize", len(concatenated))
 
 	return concatenated, nil
 }
@@ -1324,8 +1356,12 @@ func (r *LlamaStackDistributionReconciler) gatherExplicitCABundle(ctx context.Co
 }
 
 func (r *LlamaStackDistributionReconciler) gatherODHCABundle(ctx context.Context, instance *llamav1alpha1.LlamaStackDistribution, collector *certificateCollector) error {
-	// ODH bundle is optional, so we ignore errors from detection
-	configMap, keys, _ := r.detectODHTrustedCABundle(ctx, instance)
+	configMap, keys, err := r.detectODHTrustedCABundle(ctx, instance)
+	if err != nil {
+		// Log but don't fail - ODH bundle is optional
+		collector.logger.V(1).Info("Could not detect ODH trusted CA bundle", "error", err)
+		return nil
+	}
 	if configMap == nil || len(keys) == 0 {
 		return nil
 	}
@@ -1378,8 +1414,9 @@ func (r *LlamaStackDistributionReconciler) processODHConfigMapKeys(configMap *co
 }
 
 // extractValidCertificates extracts only valid CERTIFICATE blocks from PEM data.
-// This function validates all PEM blocks in the data.
-// It filters out non-certificate PEM blocks (e.g., private keys, public keys).
+// This function validates PEM structure and X.509 certificate format for all blocks.
+// It filters out non-certificate PEM blocks (e.g., private keys, public keys) and
+// rejects invalid X.509 certificates.
 // Returns: (certificates as strings, total size, certificate count, error).
 func extractValidCertificates(data []byte, keyName string) ([]string, int, int, error) {
 	if len(data) == 0 {
@@ -1401,6 +1438,11 @@ func extractValidCertificates(data []byte, keyName string) ([]string, int, int, 
 			// Skip non-certificate blocks (could be private keys, etc.)
 			remaining = rest
 			continue
+		}
+
+		// Validate that this is actually a valid X.509 certificate
+		if _, err := x509.ParseCertificate(block.Bytes); err != nil {
+			return nil, 0, 0, fmt.Errorf("failed to parse X.509 certificate from key '%s': %w", keyName, err)
 		}
 
 		// Re-encode the certificate to ensure it's properly formatted
@@ -1476,10 +1518,16 @@ func (r *LlamaStackDistributionReconciler) reconcileManagedCABundleConfigMap(ctx
 		// ConfigMap exists, update it if the data has changed
 		if existingConfigMap.Data[ManagedCABundleKey] != caBundleData {
 			logger.Info("Updating managed CA bundle ConfigMap", "configMap", managedConfigMapName)
+			// Use Patch instead of Update to avoid race conditions
+			patch := client.MergeFrom(existingConfigMap.DeepCopy())
 			existingConfigMap.Data = desiredConfigMap.Data
 			existingConfigMap.Labels = desiredConfigMap.Labels
-			if err := r.Update(ctx, existingConfigMap); err != nil {
-				return fmt.Errorf("failed to update managed CA bundle ConfigMap: %w", err)
+			if err := r.Patch(ctx, existingConfigMap, patch); err != nil {
+				if k8serrors.IsConflict(err) {
+					// Conflict detected, will be retried by controller
+					return fmt.Errorf("failed to patch managed CA bundle ConfigMap (conflict): %w", err)
+				}
+				return fmt.Errorf("failed to patch managed CA bundle ConfigMap: %w", err)
 			}
 			logger.Info("Successfully updated managed CA bundle ConfigMap", "configMap", managedConfigMapName)
 		} else {
