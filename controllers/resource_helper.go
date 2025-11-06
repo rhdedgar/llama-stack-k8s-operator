@@ -57,7 +57,7 @@ func getManagedCABundleConfigMapName(instance *llamav1alpha1.LlamaStackDistribut
 
 // startupScript is the script that will be used to start the server.
 var startupScript = `
-set -euo pipefail
+set -e
 
 # Determine which CLI to use based on llama-stack version
 VERSION_CODE=$(python -c "
@@ -89,25 +89,12 @@ except Exception as e:
 ")
 
 # Execute the appropriate CLI based on version
-# Check if custom config exists, otherwise use container default behavior
-if [ -f "/etc/llama-stack/run.yaml" ]; then
-    echo "Using custom config file: /etc/llama-stack/run.yaml"
-    case $VERSION_CODE in
-        0) exec python3 -m llama_stack.distribution.server.server --config /etc/llama-stack/run.yaml ;;
-        1) exec python3 -m llama_stack.core.server.server /etc/llama-stack/run.yaml ;;
-        2) exec llama stack run /etc/llama-stack/run.yaml ;;
-        *) echo "Invalid version code: $VERSION_CODE, using new CLI"; exec llama stack run /etc/llama-stack/run.yaml ;;
-    esac
-else
-    echo "No custom config file found, using container default entrypoint with distribution name"
-    # Use the container's default behavior - pass distribution name as argument
-    case $VERSION_CODE in
-        0) exec python3 -m llama_stack.distribution.server.server starter ;;
-        1) exec python3 -m llama_stack.core.server.server starter ;;
-        2) exec llama stack run starter ;;
-        *) echo "Invalid version code: $VERSION_CODE, using new CLI"; exec llama stack run starter ;;
-    esac
-fi`
+case $VERSION_CODE in
+    0) python3 -m llama_stack.distribution.server.server --config /etc/llama-stack/run.yaml ;;
+    1) python3 -m llama_stack.core.server.server /etc/llama-stack/run.yaml ;;
+    2) llama stack run /etc/llama-stack/run.yaml ;;
+    *) echo "Invalid version code: $VERSION_CODE, using new CLI"; llama stack run /etc/llama-stack/run.yaml ;;
+esac`
 
 // validateConfigMapKeys validates that all ConfigMap keys contain only safe characters.
 // Note: This function validates key names only. PEM content validation is performed
