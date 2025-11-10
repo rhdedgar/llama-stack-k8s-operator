@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"sort"
 
 	llamav1alpha1 "github.com/llamastack/llama-stack-k8s-operator/api/v1alpha1"
 	"github.com/llamastack/llama-stack-k8s-operator/pkg/compare"
@@ -424,9 +425,16 @@ func updateDeploymentSpec(res *resource.Resource, manifestCtx *ManifestContext) 
 	}
 
 	// Apply pod spec enhancements
+	// Sort keys to ensure deterministic ordering and prevent spurious deployment updates
 	if manifestCtx.PodSpec != nil {
-		for key, value := range manifestCtx.PodSpec {
-			templateSpec[key] = value
+		keys := make([]string, 0, len(manifestCtx.PodSpec))
+		for key := range manifestCtx.PodSpec {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+
+		for _, key := range keys {
+			templateSpec[key] = manifestCtx.PodSpec[key]
 		}
 	}
 
