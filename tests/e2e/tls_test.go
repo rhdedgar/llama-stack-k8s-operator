@@ -100,6 +100,10 @@ func testLlamaStackWithCABundle(t *testing.T) {
 	err = waitForDeploymentCreation(t, llsTestNS, "llamastack-with-config", 3*time.Minute)
 	require.NoError(t, err, "LlamaStack deployment should be created by operator")
 
+	// Wait for pods to be running and ready
+	err = WaitForPodsReady(t, TestEnv, llsTestNS, "llamastack-with-config", 5*time.Minute)
+	require.NoError(t, err, "LlamaStack pods should be running and ready")
+
 	// Verify certificate volumes are mounted correctly
 	err = verifyCertificateMounts(t, llsTestNS, "llamastack-with-config")
 	require.NoError(t, err, "Certificate volumes should be mounted correctly")
