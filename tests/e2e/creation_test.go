@@ -93,6 +93,10 @@ func testCreateDistributionForType(t *testing.T, distType string) *v1alpha1.Llam
 	}, llsdistributionCR.Name, ns.Name, ResourceReadyTimeout, isDeploymentReady)
 	require.NoError(t, err)
 
+	// Wait for pods to be running and ready
+	err = WaitForPodsReady(t, TestEnv, ns.Name, llsdistributionCR.Name, ResourceReadyTimeout)
+	require.NoError(t, err, "Pods should be running and ready")
+
 	// Verify service is created
 	err = EnsureResourceReady(t, TestEnv, schema.GroupVersionKind{
 		Group:   "",
