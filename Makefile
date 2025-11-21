@@ -132,7 +132,7 @@ clean: ## Remove temporary files, caches, and downloaded tools
 	@if command -v $(GOLANGCI_LINT) >/dev/null 2>&1; then \
 		$(GOLANGCI_LINT) cache clean; \
 	fi
-	rm -f $(GOLANGCI_TMP_FILE) Dockerfile.cross cover.out
+	rm -f $(GOLANGCI_TMP_FILE) Dockerfile.cross Dockerfile.podman.tmp cover.out
 	rm -rf $(LOCALBIN)
 
 .PHONY: vet
@@ -184,16 +184,61 @@ image-push: ## Push image with the manager.
 # - have enabled BuildKit. More info: https://docs.docker.com/develop/develop-images/build_enhancements/
 # - be able to push the image to your registry (i.e. if you do not set a valid value via IMG=<myregistry/image:<tag>> then the export will fail)
 # To adequately provide solutions that are compatible with multiple platforms, you should consider using this option.
-PLATFORMS ?= linux/arm64,linux/amd64,linux/s390x,linux/ppc64le
+# Default platforms: linux/amd64,linux/arm64. To add more architectures, override PLATFORMS:
+#   make docker-buildx PLATFORMS=linux/amd64,linux/arm64,linux/s390x,linux/ppc64le IMG=...
+PLATFORMS ?= linux/amd64,linux/arm64
 .PHONY: docker-buildx
-docker-buildx: ## Build and push docker image for the manager for cross-platform support
-	# copy existing Dockerfile and insert --platform=${BUILDPLATFORM} into Dockerfile.cross, and preserve the original Dockerfile
-	sed -e '1 s/\(^FROM\)/FROM --platform=\$$\{BUILDPLATFORM\}/; t' -e ' 1,// s//FROM --platform=\$$\{BUILDPLATFORM\}/' Dockerfile > Dockerfile.cross
-	- $(CONTAINER_TOOL) buildx create --name x-builder
-	$(CONTAINER_TOOL) buildx use x-builder
-	- $(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${IMG} -f Dockerfile.cross .
-	- $(CONTAINER_TOOL) buildx rm x-builder
-	rm Dockerfile.cross
+docker-buildx: ## Build and push docker/podman image for the manager for cross-platform support
+	@if [ "$(CONTAINER_TOOL)" = "podman" ]; then \
+		echo "Using podman for multi-arch build..."; \
+		if $(CONTAINER_TOOL) buildx version >/dev/null 2>&1; then \
+			echo "Podman buildx plugin detected, using buildx..."; \
+			$(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${IMG} -f Dockerfile . || \
+			$(MAKE) podman-buildx-multiarch PLATFORMS=$(PLATFORMS) IMG=${IMG}; \
+		else \
+			echo "Podman buildx plugin not available, using manifest approach..."; \
+			$(MAKE) podman-buildx-multiarch PLATFORMS=$(PLATFORMS) IMG=${IMG}; \
+		fi; \
+	else \
+		echo "Using docker buildx for multi-arch build..."; \
+		- $(CONTAINER_TOOL) buildx create --name x-builder --use || true; \
+		$(CONTAINER_TOOL) buildx build --push --platform=$(PLATFORMS) --tag ${IMG} -f Dockerfile .; \
+	fi
+
+.PHONY: podman-buildx-multiarch
+podman-buildx-multiarch: ## Build and push multi-arch images using podman native commands (fallback if buildx plugin unavailable)
+	@echo "Building multi-arch images using podman manifest approach..."
+	@manifest_name=$$(echo ${IMG} | sed 's|:.*||'); \
+	manifest_tag=$$(echo ${IMG} | sed 's|.*:||'); \
+	$(CONTAINER_TOOL) manifest create $${manifest_name}:$${manifest_tag} || true; \
+	for platform in $$(echo $(PLATFORMS) | tr ',' ' '); do \
+		echo "Building for platform: $$platform"; \
+		arch_tag=$${manifest_name}:$${manifest_tag}-$$(echo $$platform | tr '/' '-'); \
+		os=$$(echo $$platform | cut -d'/' -f1); \
+		arch=$$(echo $$platform | cut -d'/' -f2); \
+		$(CONTAINER_TOOL) build --build-arg BUILDPLATFORM=$$platform --build-arg TARGETPLATFORM=$$platform --build-arg TARGETOS=$$os --build-arg TARGETARCH=$$arch -t $$arch_tag -f Dockerfile .; \
+		$(CONTAINER_TOOL) push $$arch_tag; \
+		$(CONTAINER_TOOL) manifest add $${manifest_name}:$${manifest_tag} $$arch_tag; \
+	done; \
+	$(CONTAINER_TOOL) manifest push --all $${manifest_name}:$${manifest_tag} docker://$${manifest_name}:$${manifest_tag}
+
+.PHONY: image-build-arm
+image-build-arm: ## Build ARM64 image using podman/docker (single architecture)
+	@# For podman, --platform automatically sets BUILDPLATFORM and TARGETPLATFORM
+	@# For cross-compilation with CGO, we need the builder stage to use the target platform
+	@# We create a temporary Dockerfile that fixes the platform references
+	@if [ "$(CONTAINER_TOOL)" = "podman" ]; then \
+		trap 'rm -f Dockerfile.podman.tmp' EXIT; \
+		sed -e 's/^ARG BUILDPLATFORM=linux\/amd64/ARG BUILDPLATFORM/' \
+		    -e 's/^ARG TARGETPLATFORM=linux\/amd64/ARG TARGETPLATFORM/' \
+		    -e 's|\$${BUILDPLATFORM}|linux/arm64|g' \
+		    Dockerfile > Dockerfile.podman.tmp; \
+		$(CONTAINER_TOOL) build --platform=linux/arm64 --build-arg TARGETOS=linux --build-arg TARGETARCH=arm64 -f Dockerfile.podman.tmp -t ${IMG} .; \
+		rm -f Dockerfile.podman.tmp; \
+		trap - EXIT; \
+	else \
+		$(CONTAINER_TOOL) build --platform=linux/arm64 --build-arg BUILDPLATFORM=linux/arm64 --build-arg TARGETPLATFORM=linux/arm64 --build-arg TARGETOS=linux --build-arg TARGETARCH=arm64 -t ${IMG} -f Dockerfile .; \
+	fi
 
 # Installer directory is updated to `release` from operator-sdk default `dist` directory.
 .PHONY: build-installer
