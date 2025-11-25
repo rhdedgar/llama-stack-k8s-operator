@@ -1,7 +1,12 @@
 # Build the manager binary
+# Supports multi-architecture builds: linux/amd64, linux/arm64, linux/s390x, linux/ppc64le
+# BUILDPLATFORM and TARGETPLATFORM are automatically set by Docker buildx for multi-arch builds
+ARG BUILDPLATFORM=linux/amd64
+ARG TARGETPLATFORM=linux/amd64
 ARG GOLANG_VERSION=1.24
 
-FROM registry.access.redhat.com/ubi9/go-toolset:${GOLANG_VERSION} as builder
+FROM --platform=${BUILDPLATFORM} registry.access.redhat.com/ubi9/go-toolset:${GOLANG_VERSION} as builder
+# TARGETOS and TARGETARCH are automatically set by Docker buildx for multi-arch builds
 ARG TARGETOS=linux
 ARG TARGETARCH
 ARG CGO_ENABLED=1
@@ -32,7 +37,7 @@ RUN CGO_ENABLED=${CGO_ENABLED} GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -a
 
 # Use distroless as minimal base image to package the manager binary
 # Refer to https://github.com/GoogleContainerTools/distroless for more details
-FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
+FROM --platform=${TARGETPLATFORM} registry.access.redhat.com/ubi9/ubi-minimal:latest
 WORKDIR /
 COPY --from=builder /workspace/manager .
 COPY --from=builder /workspace/controllers/manifests ./manifests/

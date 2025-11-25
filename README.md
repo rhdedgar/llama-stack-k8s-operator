@@ -164,6 +164,46 @@ Set `enabled: false` (or remove the block) to turn the feature back off; the ope
   The default image used is `quay.io/llamastack/llama-stack-k8s-operator:latest` when not supply argument for `make image`
   To create a local file `local.mk` with env variables can overwrite the default values set in the `Makefile`.
 
+- Building multi-architecture images (ARM64, AMD64, etc.)
+
+  The operator supports building for multiple architectures including ARM64. To build and push multi-arch images:
+
+  ```commandline
+  make image-buildx IMG=quay.io/<username>/llama-stack-k8s-operator:<custom-tag>
+  ```
+
+  By default, this builds for `linux/amd64,linux/arm64`. You can customize the platforms by setting the `PLATFORMS` variable:
+
+  ```commandline
+  # Build for specific platforms
+  make image-buildx IMG=quay.io/<username>/llama-stack-k8s-operator:<custom-tag> PLATFORMS=linux/amd64,linux/arm64
+
+  # Add more architectures (e.g., for future support)
+  make image-buildx IMG=quay.io/<username>/llama-stack-k8s-operator:<custom-tag> PLATFORMS=linux/amd64,linux/arm64,linux/s390x,linux/ppc64le
+  ```
+
+  **Note**:
+  - The `image-buildx` target works with both Docker and Podman. It will automatically detect which tool is being used.
+  - For Docker: Multi-arch builds require Docker Buildx and may use QEMU emulation for cross-platform builds. Ensure Docker Buildx is set up:
+
+    ```commandline
+    docker buildx create --name x-builder --use
+    ```
+
+  - For Podman: Podman 4.0+ supports `podman buildx` (experimental). If buildx is unavailable, the Makefile will automatically fall back to using podman's native manifest-based multi-arch build approach.
+  - The resulting images are multi-arch manifest lists, which means Kubernetes will automatically select the correct architecture when pulling the image.
+
+- Building ARM64-only images
+
+  To build a single ARM64 image (useful for testing or ARM-native systems):
+
+  ```commandline
+  make image-build-arm IMG=quay.io/<username>/llama-stack-k8s-operator:<custom-tag>
+  make image-push IMG=quay.io/<username>/llama-stack-k8s-operator:<custom-tag>
+  ```
+
+  This works with both Docker and Podman.
+
 - Once the image is created, the operator can be deployed directly. For each deployment method a
   kubeconfig should be exported
 
