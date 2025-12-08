@@ -207,6 +207,26 @@ else
 endif
 	@echo "Successfully pushed multi-arch image: ${IMG}"
 
+.PHONY: image-buildx-build
+image-buildx-build: ## Build multi-arch image with the manager without pushing (uses native cross-compilation)
+	@echo "Building multi-arch image for platforms: $(PLATFORMS)"
+ifeq ($(CONTAINER_TOOL),docker)
+	- $(CONTAINER_TOOL) buildx create --name x-builder 2>/dev/null || true
+	$(CONTAINER_TOOL) buildx use x-builder
+	@mkdir -p /tmp/buildx-output
+	$(CONTAINER_TOOL) buildx build --output type=local,dest=/tmp/buildx-output --platform=$(PLATFORMS) --tag ${IMG} .
+	@rm -rf /tmp/buildx-output
+else
+	# Podman: Use manifest-based multi-arch build (build only, no push)
+	$(CONTAINER_TOOL) manifest rm ${IMG} 2>/dev/null || true
+	$(CONTAINER_TOOL) manifest create ${IMG}
+	@for platform in $$(echo $(PLATFORMS) | tr ',' ' '); do \
+		echo "Building for $$platform..."; \
+		$(CONTAINER_TOOL) build --platform $$platform --manifest ${IMG} . ; \
+	done
+endif
+	@echo "Successfully built multi-arch image: ${IMG}"
+
 .PHONY: image-build-arm
 image-build-arm: ## Build ARM64 image with the manager
 	$(CONTAINER_TOOL) build --platform linux/arm64 -t ${IMG} .
