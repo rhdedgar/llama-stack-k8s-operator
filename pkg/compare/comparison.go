@@ -60,7 +60,7 @@ func CheckAndLogServiceChanges(ctx context.Context, c client.Client, desired *un
 
 	changed, unexpectedChanges := HasUnexpectedServiceChanges(desiredService, foundService)
 	if changed {
-		logger.Info("Ignoring unexpected changes in Service manifest", "changes", unexpectedChanges)
+		logger.V(1).Info("Ignoring unexpected changes in Service manifest", "changes", unexpectedChanges)
 	}
 
 	return nil

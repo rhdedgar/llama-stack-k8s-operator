@@ -170,7 +170,7 @@ func patchResource(ctx context.Context, cli client.Client, desired, existing *un
 		}
 	}
 	if !isOwner {
-		logger.Info("Skipping resource not owned by this instance",
+		logger.V(1).Info("Skipping resource not owned by this instance",
 			"kind", existing.GetKind(),
 			"name", existing.GetName(),
 			"namespace", existing.GetNamespace())
@@ -178,7 +178,7 @@ func patchResource(ctx context.Context, cli client.Client, desired, existing *un
 	}
 
 	if existing.GetKind() == "PersistentVolumeClaim" {
-		logger.Info("Skipping PVC patch - PVCs are immutable after creation",
+		logger.V(1).Info("Skipping PVC patch - PVCs are immutable after creation",
 			"name", existing.GetName(),
 			"namespace", existing.GetNamespace())
 		return nil
