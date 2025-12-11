@@ -184,7 +184,7 @@ func (r *LlamaStackDistributionReconciler) Reconcile(ctx context.Context, req ct
 	}
 
 	if instance == nil {
-		logger.Info("LlamaStackDistribution resource not found, skipping reconciliation")
+		logger.V(1).Info("LlamaStackDistribution resource not found, skipping reconciliation")
 		return ctrl.Result{}, nil
 	}
 
@@ -823,7 +823,7 @@ func (r *LlamaStackDistributionReconciler) isConfigMapReferenced(configMap clien
 		err := r.List(context.Background(), &caBundleLlamaStacks, client.MatchingFields{"spec.server.tlsConfig.caBundle.configMapName": indexKey})
 		if err != nil {
 			// Field indexer failed for CA bundle, fall back to manual check
-			logger.Info("CA bundle field indexer not supported, falling back to manual ConfigMap reference check", "error", err.Error())
+			logger.V(1).Info("CA bundle field indexer not supported, falling back to manual ConfigMap reference check", "error", err.Error())
 			return r.manuallyCheckConfigMapReference(configMap)
 		}
 		found = len(caBundleLlamaStacks.Items) > 0
@@ -939,7 +939,7 @@ func (r *LlamaStackDistributionReconciler) tryFieldIndexerLookup(ctx context.Con
 	caBundleLlamaStacks := llamav1alpha1.LlamaStackDistributionList{}
 	err = r.List(ctx, &caBundleLlamaStacks, client.MatchingFields{"spec.server.tlsConfig.caBundle.configMapName": indexKey})
 	if err != nil {
-		logger.Info("CA bundle field indexer not supported, will fall back to a manual search for ConfigMap event processing",
+		logger.V(1).Info("CA bundle field indexer not supported, will fall back to a manual search for ConfigMap event processing",
 			"indexKey", indexKey, "error", err.Error())
 		return userConfigLlamaStacks, len(userConfigLlamaStacks.Items) > 0
 	}
@@ -1216,7 +1216,7 @@ func (r *LlamaStackDistributionReconciler) updateStorageStatus(ctx context.Conte
 func (r *LlamaStackDistributionReconciler) updateServiceStatus(ctx context.Context, instance *llamav1alpha1.LlamaStackDistribution) {
 	logger := log.FromContext(ctx)
 	if !instance.HasPorts() {
-		logger.Info("No ports defined, skipping service status update")
+		logger.V(1).Info("No ports defined, skipping service status update")
 		return
 	}
 	service := &corev1.Service{}
@@ -1467,7 +1467,7 @@ func (c *certificateCollector) concatenate() (string, error) {
 	}
 
 	concatenated := builder.String()
-	c.logger.Info("Successfully gathered CA bundle data",
+	c.logger.V(1).Info("Successfully gathered CA bundle data",
 		"totalCertificates", c.certificateCount,
 		"totalSize", len(concatenated))
 
