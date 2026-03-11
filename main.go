@@ -26,10 +26,13 @@ import (
 	"github.com/llamastack/llama-stack-k8s-operator/controllers"
 	"github.com/llamastack/llama-stack-k8s-operator/pkg/cluster"
 	"go.uber.org/zap/zapcore"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	toolscache "k8s.io/client-go/tools/cache"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
@@ -79,6 +82,22 @@ func setupHealthChecks(mgr ctrl.Manager) error {
 	return nil
 }
 
+// stripConfigMapData returns a cache transform that removes Data and BinaryData
+// from ConfigMaps before they are stored in the informer cache. The informer
+// still watches all ConfigMaps so events fire normally, but memory usage is
+// reduced to metadata only. The reconciler reads full ConfigMap contents via a
+// direct (non-cached) API client when it actually needs the data.
+func stripConfigMapData() toolscache.TransformFunc {
+	return func(obj interface{}) (interface{}, error) {
+		if cm, ok := obj.(*corev1.ConfigMap); ok {
+			cm.Data = nil
+			cm.BinaryData = nil
+			cm.ManagedFields = nil
+		}
+		return obj, nil
+	}
+}
+
 func main() {
 	var metricsAddr string
 	var enableLeaderElection bool
@@ -102,8 +121,16 @@ func main() {
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-		Scheme:                     scheme,
-		Metrics:                    metricsserver.Options{BindAddress: metricsAddr},
+		Scheme:  scheme,
+		Metrics: metricsserver.Options{BindAddress: metricsAddr},
+		Cache: cache.Options{
+			DefaultTransform: cache.TransformStripManagedFields(),
+			ByObject: map[client.Object]cache.ByObject{
+				&corev1.ConfigMap{}: {
+					Transform: stripConfigMapData(),
+				},
+			},
+		},
 		HealthProbeBindAddress:     probeAddr,
 		LeaderElection:             enableLeaderElection,
 		LeaderElectionID:           "54e06e98.llamastack.io",

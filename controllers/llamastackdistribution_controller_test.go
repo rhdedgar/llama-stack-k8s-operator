@@ -960,17 +960,10 @@ func TestConfigMapUpdateTriggersReconciliation(t *testing.T) {
 	configMap.Data["image-overrides"] = "starter: quay.io/custom/llama-stack:starter"
 	require.NoError(t, k8sClient.Update(t.Context(), configMap))
 
-	// Simulate ConfigMap update by recreating reconciler (in real scenario this would be triggered by watch)
-	updatedReconciler, err := controllers.NewLlamaStackDistributionReconciler(
-		t.Context(),
-		k8sClient,
-		scheme.Scheme,
-		clusterInfo,
-	)
-	require.NoError(t, err)
-
-	// Reconcile with updated overrides
-	_, err = updatedReconciler.Reconcile(t.Context(), ctrl.Request{
+	// Reconcile with the same reconciler instance. refreshOperatorConfig (called
+	// at the start of Reconcile) reads the updated ConfigMap via the direct API
+	// client, so the new image override is picked up without recreating the reconciler.
+	_, err = reconciler.Reconcile(t.Context(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: instance.Name, Namespace: instance.Namespace},
 	})
 	require.NoError(t, err)
@@ -981,4 +974,70 @@ func TestConfigMapUpdateTriggersReconciliation(t *testing.T) {
 		deployment, func() bool {
 			return deployment.Spec.Template.Spec.Containers[0].Image == "quay.io/custom/llama-stack:starter"
 		}, "Deployment should be updated with new image")
+}
+
+func TestRefreshOperatorConfigPicksUpChanges(t *testing.T) {
+	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
+
+	namespace := createTestNamespace(t, "test-refresh-config")
+	operatorNamespace := createTestNamespace(t, "llama-stack-k8s-operator-system")
+	t.Setenv("OPERATOR_NAMESPACE", operatorNamespace.Name)
+
+	configMap := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "llama-stack-operator-config",
+			Namespace: operatorNamespace.Name,
+		},
+		Data: map[string]string{
+			"featureFlags": `enableNetworkPolicy:
+    enabled: false`,
+		},
+	}
+	require.NoError(t, k8sClient.Create(t.Context(), configMap))
+
+	instance := NewDistributionBuilder().
+		WithName("test-refresh-config").
+		WithNamespace(namespace.Name).
+		WithDistribution("starter").
+		Build()
+	require.NoError(t, k8sClient.Create(t.Context(), instance))
+
+	clusterInfo := &cluster.ClusterInfo{
+		OperatorNamespace:  operatorNamespace.Name,
+		DistributionImages: map[string]string{"starter": "default-starter-image"},
+	}
+
+	reconciler, err := controllers.NewLlamaStackDistributionReconciler(
+		t.Context(),
+		k8sClient,
+		scheme.Scheme,
+		clusterInfo,
+	)
+	require.NoError(t, err)
+
+	// Initial reconcile creates resources.
+	_, err = reconciler.Reconcile(t.Context(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: instance.Name, Namespace: instance.Namespace},
+	})
+	require.NoError(t, err)
+
+	// Verify network policy is NOT created (feature disabled).
+	networkPolicy := &networkingv1.NetworkPolicy{}
+	npName := instance.Name + "-network-policy"
+	err = k8sClient.Get(t.Context(), types.NamespacedName{Name: npName, Namespace: instance.Namespace}, networkPolicy)
+	require.True(t, apierrors.IsNotFound(err), "NetworkPolicy should not exist when feature is disabled")
+
+	// Enable network policy via operator config update.
+	configMap.Data["featureFlags"] = `enableNetworkPolicy:
+    enabled: true`
+	require.NoError(t, k8sClient.Update(t.Context(), configMap))
+
+	// Reconcile again -- refreshOperatorConfig picks up the new flag.
+	_, err = reconciler.Reconcile(t.Context(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: instance.Name, Namespace: instance.Namespace},
+	})
+	require.NoError(t, err)
+
+	// Verify network policy IS created now.
+	waitForResource(t, k8sClient, instance.Namespace, npName, networkPolicy)
 }

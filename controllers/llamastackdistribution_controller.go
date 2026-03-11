@@ -100,6 +100,9 @@ type LlamaStackDistributionReconciler struct {
 	// Cluster info
 	ClusterInfo *cluster.ClusterInfo
 	httpClient  *http.Client
+
+	// Cached operator namespace used for config refresh during reconciliation.
+	operatorNamespace string
 }
 
 // hasUserConfigMap checks if the instance has a valid UserConfig with ConfigMapName.
@@ -177,6 +180,11 @@ func (r *LlamaStackDistributionReconciler) Reconcile(ctx context.Context, req ct
 	logger := log.FromContext(ctx).WithValues("namespace", req.Namespace, "name", req.Name)
 	ctx = logr.NewContext(ctx, logger)
 
+	// Refresh feature flags and image overrides from the operator config ConfigMap.
+	// This reads via the direct (non-cached) API client so it always gets full data,
+	// even though the informer cache strips ConfigMap data to save memory.
+	r.refreshOperatorConfig(ctx)
+
 	// Fetch the LlamaStack instance
 	instance, err := r.fetchInstance(ctx, req.NamespacedName)
 	if err != nil {
@@ -213,6 +221,41 @@ func (r *LlamaStackDistributionReconciler) Reconcile(ctx context.Context, req ct
 
 	logger.Info("Successfully reconciled LlamaStackDistribution")
 	return ctrl.Result{}, nil
+}
+
+// refreshOperatorConfig re-reads the operator config ConfigMap via the direct
+// API client and updates feature flags and image mapping overrides.
+func (r *LlamaStackDistributionReconciler) refreshOperatorConfig(ctx context.Context) {
+	logger := log.FromContext(ctx)
+
+	operatorNamespace := r.operatorNamespace
+	if operatorNamespace == "" {
+		var err error
+		operatorNamespace, err = deploy.GetOperatorNamespace()
+		if err != nil {
+			logger.Error(err, "failed to get operator namespace for config refresh")
+			return
+		}
+		r.operatorNamespace = operatorNamespace
+	}
+
+	configMap := &corev1.ConfigMap{}
+	if err := r.Get(ctx, types.NamespacedName{
+		Name:      operatorConfigData,
+		Namespace: operatorNamespace,
+	}, configMap); err != nil {
+		logger.Error(err, "failed to refresh operator config")
+		return
+	}
+
+	enableNetworkPolicy, err := parseFeatureFlags(configMap.Data)
+	if err != nil {
+		logger.Error(err, "failed to parse feature flags")
+	} else {
+		r.EnableNetworkPolicy = enableNetworkPolicy
+	}
+
+	r.ImageMappingOverrides = ParseImageMappingOverrides(ctx, configMap.Data)
 }
 
 // fetchInstance retrieves the LlamaStackDistribution instance.
@@ -699,69 +742,37 @@ func (r *LlamaStackDistributionReconciler) configMapUpdatePredicate(e event.Upda
 	return r.handleReferencedConfigMapUpdate(oldConfigMap, newConfigMap)
 }
 
-// handleOperatorConfigUpdate processes updates to the operator config ConfigMap.
+// handleOperatorConfigUpdate checks whether the ConfigMap is the operator config.
+// Data processing is deferred to refreshOperatorConfig during reconciliation
+// because the cache transform strips ConfigMap data to reduce memory.
 func (r *LlamaStackDistributionReconciler) handleOperatorConfigUpdate(configMap *corev1.ConfigMap) bool {
 	operatorNamespace, err := deploy.GetOperatorNamespace()
 	if err != nil {
 		return false
 	}
 
-	if configMap.Name != operatorConfigData || configMap.Namespace != operatorNamespace {
-		return false
-	}
-
-	// Update feature flags
-	EnableNetworkPolicy, err := parseFeatureFlags(configMap.Data)
-	if err != nil {
-		log.FromContext(context.Background()).Error(err, "Failed to parse feature flags")
-	} else {
-		r.EnableNetworkPolicy = EnableNetworkPolicy
-	}
-
-	r.ImageMappingOverrides = ParseImageMappingOverrides(context.Background(), configMap.Data)
-	return true
+	return configMap.Name == operatorConfigData && configMap.Namespace == operatorNamespace
 }
 
 // handleReferencedConfigMapUpdate processes updates to referenced ConfigMaps.
+// ResourceVersion is compared instead of Data/BinaryData because the cache
+// transform strips data fields to reduce memory. This may trigger on
+// metadata-only changes, but reconciliation is idempotent.
 func (r *LlamaStackDistributionReconciler) handleReferencedConfigMapUpdate(oldConfigMap, newConfigMap *corev1.ConfigMap) bool {
-	// Only proceed if this ConfigMap is referenced by any LlamaStackDistribution
 	if !r.isConfigMapReferenced(newConfigMap) {
 		return false
 	}
 
-	// Only trigger if Data or BinaryData has changed
-	dataChanged := !cmp.Equal(oldConfigMap.Data, newConfigMap.Data)
-	binaryDataChanged := !cmp.Equal(oldConfigMap.BinaryData, newConfigMap.BinaryData)
-
-	// Log ConfigMap changes for debugging (only for referenced ConfigMaps)
-	if dataChanged || binaryDataChanged {
-		r.logConfigMapDiff(oldConfigMap, newConfigMap, dataChanged, binaryDataChanged)
+	changed := oldConfigMap.ResourceVersion != newConfigMap.ResourceVersion
+	if changed {
+		log.FromContext(context.Background()).Info("Referenced ConfigMap updated",
+			"configMapName", newConfigMap.Name,
+			"configMapNamespace", newConfigMap.Namespace,
+			"oldResourceVersion", oldConfigMap.ResourceVersion,
+			"newResourceVersion", newConfigMap.ResourceVersion)
 	}
 
-	return dataChanged || binaryDataChanged
-}
-
-// logConfigMapDiff logs the differences between old and new ConfigMaps.
-func (r *LlamaStackDistributionReconciler) logConfigMapDiff(oldConfigMap, newConfigMap *corev1.ConfigMap, dataChanged, binaryDataChanged bool) {
-	logger := log.FromContext(context.Background()).WithValues(
-		"configMapName", newConfigMap.Name,
-		"configMapNamespace", newConfigMap.Namespace)
-
-	logger.Info("Referenced ConfigMap change detected")
-
-	if dataChanged {
-		if dataDiff := cmp.Diff(oldConfigMap.Data, newConfigMap.Data); dataDiff != "" {
-			logger.Info("ConfigMap Data changed")
-			fmt.Printf("ConfigMap %s/%s Data diff:\n%s\n", newConfigMap.Namespace, newConfigMap.Name, dataDiff)
-		}
-	}
-
-	if binaryDataChanged {
-		if binaryDataDiff := cmp.Diff(oldConfigMap.BinaryData, newConfigMap.BinaryData); binaryDataDiff != "" {
-			logger.Info("ConfigMap BinaryData changed")
-			fmt.Printf("ConfigMap %s/%s BinaryData diff:\n%s\n", newConfigMap.Namespace, newConfigMap.Name, binaryDataDiff)
-		}
-	}
+	return changed
 }
 
 // configMapCreatePredicate handles ConfigMap create events.
@@ -1807,6 +1818,7 @@ func NewLlamaStackDistributionReconciler(ctx context.Context, client client.Clie
 		ImageMappingOverrides: imageMappingOverrides,
 		ClusterInfo:           clusterInfo,
 		httpClient:            &http.Client{Timeout: 5 * time.Second},
+		operatorNamespace:     operatorNamespace,
 	}, nil
 }
 
