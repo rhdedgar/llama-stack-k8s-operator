@@ -1,5 +1,5 @@
 {
-  "starter": "docker.io/ogxai/distribution-starter:latest",
+  "starter": "quay.io/dedgar/llama-stack-k8s-operator:starternonroot",
   "remote-vllm": "docker.io/ogxai/distribution-remote-vllm:latest",
   "meta-reference-gpu": "docker.io/ogxai/distribution-meta-reference-gpu:latest",
   "postgres-demo": "docker.io/ogxai/distribution-postgres-demo:latest"
