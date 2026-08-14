@@ -112,7 +112,7 @@ data:
       - provider_id: sqlite-vec
         provider_type: inline::sqlite-vec
         config:
-          db_path: ${env.SQLITE_STORE_DIR:=~/.ogx/distributions/starter}/sqlite_vec.db
+          db_path: ${env.SQLITE_STORE_DIR:=/.ogx}/sqlite_vec.db
           persistence:
             namespace: vector_io::sqlite_vec
             backend: kv_default
@@ -256,10 +256,10 @@ data:
       backends:
         kv_default:
           type: kv_sqlite
-          db_path: ${env.SQLITE_STORE_DIR:=~/.ogx/distributions/starter}/kvstore.db
+          db_path: ${env.SQLITE_STORE_DIR:=/.ogx}/kvstore.db
         sql_default:
           type: sql_sqlite
-          db_path: ${env.SQLITE_STORE_DIR:=~/.ogx/distributions/starter}/sql_store.db
+          db_path: ${env.SQLITE_STORE_DIR:=/.ogx}/sqlstore.db
       stores:
         metadata:
           namespace: registry

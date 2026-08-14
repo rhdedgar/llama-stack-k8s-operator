@@ -27,10 +27,10 @@ data:
       backends:
         kv_default:
           type: kv_sqlite
-          db_path: ${env.SQLITE_STORE_DIR:=~/.ogx/distributions/ollama}/kvstore.db
+          db_path: ${env.SQLITE_STORE_DIR:=/.ogx}/kvstore.db
         sql_default:
           type: sql_sqlite
-          db_path: ${env.SQLITE_STORE_DIR:=~/.ogx/distributions/ollama}/sqlstore.db
+          db_path: ${env.SQLITE_STORE_DIR:=/.ogx}/sqlstore.db
       stores:
         metadata:
           backend: kv_default
@@ -64,3 +64,5 @@ spec:
       env:
       - name: OLLAMA_EMBEDDING_MODEL
         value: all-minilm:l6-v2
+      - name: SQLITE_STORE_DIR
+        value: "/.ogx"

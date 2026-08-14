@@ -243,10 +243,16 @@ func configureContainerEnvironment(
 	// on the same volume as the storage. This is not critical but useful if the server is
 	// restarted so the models and datasets are not lost and need to be downloaded again.
 	// For more information, see https://huggingface.co/docs/datasets/en/cache
-	container.Env = append(container.Env, corev1.EnvVar{
-		Name:  "HF_HOME",
-		Value: mountPath,
-	})
+	container.Env = append(container.Env,
+		corev1.EnvVar{
+			Name:  "HF_HOME",
+			Value: mountPath,
+		},
+		corev1.EnvVar{
+			Name:  "SQLITE_STORE_DIR",
+			Value: mountPath,
+		},
+	)
 
 	// Add CA bundle environment variable if any CA bundles are configured
 	// (explicit or auto-detected ODH bundles)

@@ -1,5 +1,5 @@
 {
-  "starter": "quay.io/rhoai/odh-ogx-core-rhel9:rhoai-3.5-ea.2",
+  "starter": "quay.io/dedgar/llama-stack-k8s-operator:trustedproxy",
   "remote-vllm": "docker.io/ogxai/distribution-remote-vllm:latest",
   "meta-reference-gpu": "docker.io/ogxai/distribution-meta-reference-gpu:latest",
   "postgres-demo": "docker.io/ogxai/distribution-postgres-demo:latest"
